@@ -1182,7 +1182,7 @@ All three models show an instability in the variance parameter for the process e
 
 The three fits are all well-tuned, robust, and present good model diagnostics. Vanessa's model is the simplest, has best AIC and AICc but slightly larger retrospective patterns than Casper's. 
 
-A compromise could be to use a new model that with Vanessa's configuration but add the mean-variance relationship for the commercial fleet, choice that was dismissed in section despite good outputs. This is not shown here but this new model configuration was tested ("fit13"). while this new model performs well for most diagnostics, it does show some instability so it is not used here. The model has been saved and can be provided if of interest.
+A compromise could be to use a new model that with Vanessa's configuration but add the mean-variance relationship for the commercial fleet, choice that was dismissed in section \ref{predVarObs} despite good outputs. This is not shown here but this new model configuration was tested ("fit13"). while this new model performs well for most diagnostics, it does show some instability so it is not used here. The model has been saved and can be provided if of interest.
 
 In conclusion, we favor the simplest model and continue with Vanessa's model "fit12".
 
@@ -1210,7 +1210,7 @@ bestFit2 <- profFits[[which(p2==max(p2))]]
 
 ```{r profiling2, echo=FALSE, fig.cap="Profiling of natural mortality for the fit 'fit12'. The points represent the log-likelihood value for each model run. The best model is therefore the one with the largest value", fig.dim=c(6,6)}
 plot(p2~x2, ylab="Log-likelihood")
-abline(v=x2[which(p2==max(p2))])
+abline(v=x2[which(p2==max(p2))]) 
 ```
 
 Here the profiling exercise concludes that M should be `r x2[which(p2==max(p2))]` times the M of the chosen model or `r x2[which(p2==max(p2))]*x[which(p==max(p))]` times the original M to get the best fit (Figure \ref{fig:profiling2}). This means M over time is as follows:
