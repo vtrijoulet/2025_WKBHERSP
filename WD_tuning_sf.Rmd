@@ -719,27 +719,27 @@ recplot(retro10, las=0)
 legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho10[1]))), bty="n")
 ```
 
-```{r catchfit10, echo=FALSE, fig.cap="Retrospective patterns for the fit 'fit10'.", fig.dim=c(6,6)}
+```{r catchfit10, echo=FALSE, fig.cap="Estimated and observed catch for the fits 'fit9' and 'fit10'.", fig.dim=c(6,6)}
 tmp <- c("fit9"=fit9, "fit10"=fit10)
-catchplot(tmp, addCI=TRUE)
+catchplot(tmp, addCI=TRUE) 
 ```
 
 
 AIC is better for "fit10", no obvious changes appear for the residuals except that the significance of the mean-variance relationship has disappeared for fleet 1 and age 1 shows large variance for fleet 1 that is not clear on the bubble plot (Figure \ref{fig:resfit10}). Retrospective patterns are slightly improved. The consequence of using this configuration is that the large catches have a smaller variance and the low catches larger variance (Figure \ref{fig:catchfit10}). The consequence of using the mean-variance assumption is that the variance parameters for the commercial fleet become difficult to interpret, with very large values and large standard errors around them.
 
-Despite the fit showing slightly better results, to favour model simplicity, we go ahead with the simpler model. We therefore go ahead with "fit9" that will be likely more robust. 
+Despite the fit showing slightly better results, to favor model simplicity, we go ahead with the simpler model. We therefore go ahead with "fit9" that will be likely more robust. 
 
 
 ## Correlation of fishing mortality across ages (corFlag)
 
 SAM uses an AR(1) across ages by default with similar ages more highly correlated than ages that are further apart. It could be relevant to use corFlag=0 (no correlation) if correlation in F-process starts to disappear or corFlag=1 (compound symmetry, all ages are equally correlated) if the correlation is the same for all ages.
 
-```{r matplot, echo=FALSE, fig.cap="Retrospective patterns for the fit 'fit9'.", fig.dim=c(6,6)}
+```{r matplot, echo=FALSE, fig.cap="Log fishing mortality at age for the fit 'fit9'.", fig.dim=c(6,6)}
 matplot(y=log(faytable(fit9)), x=fit9$data$years, ylab="Log F at age", type="l", xlab="")
 for (i in 1:ncol(faytable(fit9))) text(y=log(faytable(fit9))[,i], x=fit9$data$years, labels = colnames(faytable(fit9))[i], cex = 0.7, col=i)
 toInterval <- function(x, a, b, d) {return ((b - a)/(1 + exp(-d * x)) + a)}
 
-rhocorFlag <- toInterval(fit9$pl$itrans_rho,-1,1,2)
+rhocorFlag <- toInterval(fit9$pl$itrans_rho,-1,1,2) 
 
 ```
 
