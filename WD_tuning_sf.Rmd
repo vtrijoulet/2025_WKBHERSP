@@ -1,0 +1,1423 @@
+---
+title: "Working document: Tuning of the single fleet model for WBSS herring"
+author: Vanessa Trijoulet
+output:
+  bookdown::pdf_document2: default
+bibliography: refs.bib
+date: "`r format(Sys.Date(), '%d %B %Y')`"
+header-includes:
+  - \usepackage{pdflscape}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE,
+	cache = TRUE,
+	results = "hide",
+	tidy = TRUE,
+	tidy.opts = list(width.cutoff = I(90))
+)
+seed <- 1234 
+qplot <-function(fit, ...){
+  Q <- fit$conf$keyLogFpar
+  Q[] <- exp(fit$pl$logFpar)[ifelse(Q<0,NA,Q+1)]
+  ages <- fit$conf$minAge:fit$conf$maxAge
+  Q <- Q/rowMeans(Q, na.rm=T)
+  idx <- apply(Q,1,function(x)!all(is.na(x)))
+  Q <- Q[idx,]
+  matplot(ages, t(Q), type="b", lwd=4, ylab="Standardized catchability", pch=1, col=1:10, lty=1:10, ...)
+  fn<-attr(fit$data, "fleetNames")[idx]
+  legend("topright", legend=fn, lty=1:10, lwd=4, col=1:10, bty="n")
+}
+```
+
+
+# Model with default configuration
+
+Here we used the single fleet SAM model from @nielsen2014.
+
+The data created in "WD_data_prep.pdf" was copied to stockassessment.org under the name "WBSS_HAWG_2025_sf_benchmark" and a default configuration file was created and the model run to be then used in this working document (WD), as follows:
+
+```{r fit}
+library(stockassessment)
+fit <- fitfromweb("WBSS_HAWG_2025_sf_benchmark") # fit with new data and default configuration
+# Note to use for summary:
+attr(fit, "comment") <- "Fit from stockassessment.org, default configuration with Fbar range 3-6"
+```
+
+The data used in the model is summarized in Figure  \ref{fig:data}.
+
+```{r data, echo=FALSE, fig.cap="Data used in the model.", fig.dim=c(6,6)}
+dataplot(fit)
+```
+
+## Investigating the Fbar range
+
+Before starting with the tuning, we investigate the best age range for fishing mortality. The current age range is 3-6. The catch curve is shown in Figure \ref{fig:caton}. We investigate the proportion of catch at age in weight per age as follows:
+
+```{r, results='markup'}
+canum <- getFleet(fit, 1, pred=FALSE)
+caton <- canum*fit$data$catchMeanWeight[,,"Residual catch"]
+prop <- caton/apply(caton,1,sum)
+meanprop <- apply(prop,2,mean)
+meanprop
+```
+
+```{r caton, echo=FALSE, fig.cap="Catch at age (t) used in the model.", fig.dim=c(6,6)}
+matplot(y=t(caton), x=as.numeric(rownames(t(caton))), type="l", xlab="Age", ylab="Catch (t)")
+for (i in 1:ncol(t(caton))) text(y=t(caton)[,i], x=as.numeric(rownames(t(caton))), labels = colnames(t(caton))[i], cex = 0.7, col=i)
+```
+
+
+Here, we see that age 2 represents on average `r round(meanprop["2"]*100, 2)`\%, which is as much as for age 3, which is currently included in the Fbar range. Proportion goes to less than 10\% from age 6 onwards. Ages 2-5 could then maybe be relevant. If age 6 needs to be included as of now, there is no good argument for not included age 1 too that show as much importance in the total catch. 
+
+We also look at the cumulative sum of the ages and see where it gets larger than 25\% (done by default to determine default Fbar range in SAM).
+
+```{r, results='markup'}
+cumsum(meanprop)
+cumsum(rev(meanprop))
+```
+
+Here, we see that age 2 and age 5 shows more than 25\% cumulative sum so a Fbar range for ages 2-5 seems to be a good choice. We therefore change the Fbar range as follows:
+
+```{r}
+defconf <- fit$conf
+defconf$fbarRange <- c(2,5)
+deffit <- sam.fit(fit$data, defconf, fit$pl)
+attr(deffit, "comment") <- "Default configuration with new Fbar range 2-5"
+dat <- deffit$data
+```
+
+```{r deffit, results='markup'}
+deffit
+AIC(deffit)
+```
+
+
+## Diagnostics for the fit with default configuration
+
+Residuals and retrospective patterns for the fit with default configuration and new Fbar range of 2-5 are shown in Figures \ref{fig:resdeffit} and \ref{fig:retrodeffit}, respectively.
+
+```{r resdeffit, fig.cap="Residual diagnostic plots for the fit 'deffit' with default configuration.", fig.dim=c(20,20)}
+set.seed(seed, sample.kind = "Rounding") # only relevant to random effect residuals, problem with RmD
+res <- residuals(deffit)
+residplot(deffit, resid=res)
+```
+
+```{r retrodeffit, fig.cap="Retrospective patterns for the fit 'deffit' with default configuration.", fig.dim=c(6,10)}
+retrodef <- retro(deffit, year = 5)
+rhodef <- mohn(retrodef)
+
+par(mfrow=c(3,1))
+ssbplot(retrodef, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rhodef[2]))), bty="n")
+fbarplot(retrodef, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rhodef[3]))), bty="n")
+recplot(retrodef, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rhodef[1]))), bty="n")
+
+```
+
+Note that despite the residuals needing improving, the retrospective patterns are already much better than with the current assessment model.
+
+
+\clearpage
+
+# Tuning
+
+For the tuning of the model, we primarily consider model performance (e.g., convergence, hessian is positive definite, the standard error around parameters can be estimated), one-step ahead (OSA) residuals [@trijoulet2023osa], and retrospective patterns.
+
+
+## Bias in catch and survey fleets due to parameter coupling (keyLogSta and keylogFpar parameters, respectively)
+
+From Figure \ref{fig:resdeffit}, we see medium high significant (darker blue) bias in the IBTS/BITSQ1 fleet (fleet 5) for ages 4 and 5. The bias is also visible in the bubble plot, where we see age effects (only red or blue residuals for most of the time series) for both ages. As a result, we choose to uncoupled these ages as follows:
+
+```{r, results='markup'}
+## Modify the configuration
+conf1 <- defconf
+conf1$keyLogFpar
+conf1$keyLogFpar[5,6] <- 9
+conf1$keyLogFpar 
+```
+
+```{r fit1}
+## Fit with new configuration
+par1<-defpar(dat,conf1)
+fit1<-sam.fit(dat,conf1,par1)
+attr(fit1, "comment") <- "Uncouple ages 4 and 5 for IBTS/BITS Q1"
+```
+
+```{r, results='markup'}
+## Check new fit convergence and AIC
+fit1$sdrep
+AIC(deffit)
+AIC(fit1)
+```
+
+```{r resfit1, echo=FALSE, fig.cap="Residual diagnostic plots for the fitted object 'fit1'.", fig.dim=c(20,20)}
+## New residuals and plot
+set.seed(seed, sample.kind = "Rounding")
+res1 <- residuals(fit1)
+residplot(fit1, resid=res1)
+```
+
+```{r retrofit1, echo=FALSE, fig.cap="Retrospective patterns for the fit 'fit1'.", fig.dim=c(6,10)}
+retro1 <- retro(fit1, year = 5)
+rho1 <- mohn(retro1)
+
+par(mfrow=c(3,1))
+ssbplot(retro1, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho1[2]))), bty="n")
+fbarplot(retro1, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho1[3]))), bty="n")
+recplot(retro1, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho1[1]))), bty="n")
+
+```
+
+
+AIC and Mohn's rho for "fit1" are better than for deffit and the bias has disappeared for the IBTS/BITSQ1 fleet (Figure \ref{fig:resfit1}). 
+
+There is medium high bias in the catch fleet for age 2 and 8. All ages are uncoupled except for ages 7 and 8. The bias is not as obvious in the bubble plot with maybe a bit more red residuals for age 8 than the others. Here we still try to uncouple the last two ages to see if the fit could be improved as follows:
+
+```{r, results='markup'}
+## Modify the configuration
+conf2 <- conf1
+conf2$keyLogFsta
+conf2$keyLogFsta[1,9] <- 8
+conf2$keyLogFsta
+```
+
+```{r fit2}
+## Fit with new configuration
+par2<-defpar(dat,conf2)
+fit2<-sam.fit(dat,conf2,par2)
+attr(fit2, "comment") <- "Uncouple ages 7 and 8+ for commercial fleet"
+```
+
+```{r, results='markup'}
+## Check new fit convergence and AIC
+fit2$sdrep
+AIC(fit1)
+AIC(fit2)
+```
+
+```{r resfit2, echo=FALSE, fig.cap="Residual diagnostic plots for the fitted object 'fit2'.", fig.dim=c(20,20)}
+## New residuals and plot
+set.seed(seed, sample.kind = "Rounding")
+res2 <- residuals(fit2)
+residplot(fit2, resid=res2)
+```
+
+```{r retrofit2, echo=FALSE, fig.cap="Retrospective patterns for the fit 'fit2'.", fig.dim=c(6,10)}
+retro2 <- retro(fit2, year = 5)
+rho2 <- mohn(retro2)
+
+par(mfrow=c(3,1))
+ssbplot(retro2, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho2[2]))), bty="n")
+fbarplot(retro2, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho2[3]))), bty="n")
+recplot(retro2, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho2[1]))), bty="n")
+
+```
+
+```{r sel2, echo=FALSE, fig.cap="Fishing mortality at age. Each line is a year.", fig.dim=c(6,6)}
+matplot(t(faytable(fit2)), type="o", ylab="F")
+```
+
+\clearpage
+
+While the residual plots looks quite similar as before (Figure \ref{fig:resfit2}), the AIC is slightly better with fit2 and the retrospective patterns are well improved (Figure \ref{fig:retrofit2}). 
+<!-- We therefore continue further from this configuration. -->
+
+However, Figure \ref{fig:sel2} shows that the new fit estimates a domed-shaped fishing mortality with a decrease for the older age (8+). Most of the fisheries for herring use pelagic trawls that should exhibit asymptotic selectivity pattern, where larger fish are fully retained. The estimated domed-shaped fishing mortality seems to show there is a problem with numbers at age 8+ that is likely due to erroneous total mortality. As fishing mortality is estimated, the problem could be due to our estimates of natural mortality. To test this hypothesis, we do a profiling of M from "fit1" (ages 7 and 8+ coupled for commercial fleet), by introducing a multiplier on M at age and refitting the model as follows:
+
+```{r}
+profFits <- list()
+profileM<-function(x, fit){
+    f <- fit
+    nm <- x*f$data$natMor
+    f$data$natMor <- nm
+    ff <- runwithout(f, silent=TRUE) # re-run with new M 
+    profFits[[length(profFits)+1]] <<- ff
+    logLik(ff)
+}
+
+x <- seq(0.5,2.5, by=.1)
+
+p <- Vectorize(profileM, vectorize.args = "x")(x = x, fit = fit1)
+
+bestFit <- profFits[[which(p==max(p))]]
+attr(bestFit, "comment") <- "Profiling of M from fit1"
+```
+
+```{r profiling, echo=FALSE, fig.cap="Profiling of natural mortality for the fit 'fit1'. The points represent the log-likelihood value for each model run. The best model is therefore the one with the largest value", fig.dim=c(6,6)}
+plot(p~x, ylab="Log-likelihood")
+abline(v=x[which(p==max(p))])
+```
+
+Here the profiling exercise concludes that M should be `r x[which(p==max(p))]` times the original M to get the best fit (Figure \ref{fig:profiling}). This means M over time is as given below. While large, the new M estimates at age are still well below the ones estimated according to Lorenzen.
+
+```{r, results='markup'}
+bestFit$data$natMor[1,]
+# Lorenzen ocean parameters
+lorb <- -0.305 
+lormu <- 3.69
+M_lorenzen <- function(w) return(lormu*w^lorb) # weight in grams
+apply(M_lorenzen(bestFit$data$stockMeanWeight*1000),2,mean) # from kg to g
+```
+
+We don't perform a more fine-tune profiling of M now as we will do one as the final step of the tuning.
+
+```{r resbestFit, echo=FALSE, fig.cap="Residual diagnostic plots for the fitted object 'bestFit'.", fig.dim=c(20,20)}
+## New residuals and plot
+set.seed(seed, sample.kind = "Rounding")
+resbestFit <- residuals(bestFit)
+residplot(bestFit, resid=resbestFit)
+```
+
+```{r retrobestFit, echo=FALSE, fig.cap="Retrospective patterns for the fit 'bestFit'.", fig.dim=c(6,10)}
+retrobestFit <- retro(bestFit, year = 5)
+rhobestFit <- mohn(retrobestFit)
+
+par(mfrow=c(3,1))
+ssbplot(retrobestFit, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rhobestFit[2]))), bty="n")
+fbarplot(retrobestFit, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rhobestFit[3]))), bty="n")
+recplot(retrobestFit, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rhobestFit[1]))), bty="n")
+
+```
+
+In Figure \ref{fig:resbestFit}, the bias for age 8+ has now disappeared. Retrospective patterns are drastically improved with the new M values (Figure \ref{fig:retrobestFit}), going from `r round(rho1["SSB"]*100)`\% to `r round(rhobestFit["SSB"]*100)`\% for SSB, and from `r round(rho1["Fbar(2-5)"]*100)`\% to `r round(rhobestFit["Fbar(2-5)"]*100)`\% for Fbar.
+
+Despite the increase in M being large, the improvements in the model are considerable, and profiling M was already plan aa part of the tuning. We therefore continue the tuning using the new M values with the multiplier `r x[which(p==max(p))]` applied to the original M:
+
+```{r}
+dat <- bestFit$data
+```
+
+
+There is no obvious bias in parameters anymore (Figure \ref{fig:resbestFit}), but before we move to tuning variance parameters, we check if some of the parameters should be coupled instead of uncoupled.
+
+```{r qbestFit, fig.cap="Estimated survey catchability parameters for the fit 'bestFit'.", fig.dim=c(6,6)}
+qtableplot(qtable(bestFit))
+```
+
+In Figure \ref{fig:qbestFit}, we see that HERAS catchability parameters (q) for ages 3-6 are very similar. We therefore try to couple them as follows:
+
+```{r, results='markup'}
+## Modify the configuration
+conf3 <- conf1
+conf3$keyLogFpar
+conf3$keyLogFpar[2,5:7] <- 1
+idx <- conf3$keyLogFpar[3:5,]>=0
+conf3$keyLogFpar[3:5,][idx] <- conf3$keyLogFpar[3:5,][idx]-2
+conf3$keyLogFpar
+```
+
+```{r fit3}
+## Fit with new configuration
+par3<-defpar(dat,conf3)
+fit3<-sam.fit(dat,conf3,par3)
+attr(fit3, "comment") <- "Couple ages 3-6 HERAS"
+```
+
+```{r, results='markup'}
+## Check new fit convergence and AIC
+fit3$sdrep
+AIC(bestFit)
+AIC(fit3)
+```
+
+```{r resfit3, echo=FALSE, fig.cap="Residual diagnostic plots for the fitted object 'fit3'.", fig.dim=c(20,20)}
+## New residuals and plot
+set.seed(seed, sample.kind = "Rounding")
+res3 <- residuals(fit3)
+residplot(fit3, resid=res3)
+```
+
+```{r retrofit3, echo=FALSE, fig.cap="Retrospective patterns for the fit 'fit3'.", fig.dim=c(6,10)}
+retro3 <- retro(fit3, year = 5)
+rho3 <- mohn(retro3)
+
+par(mfrow=c(3,1))
+ssbplot(retro3, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho3[2]))), bty="n")
+fbarplot(retro3, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho3[3]))), bty="n")
+recplot(retro3, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho3[1]))), bty="n")
+
+```
+
+AIC is better for "fit3" and residuals and retrospective patterns are very similar than "bestFit" (Figures \ref{fig:resfit3} and \ref{fig:retrofit3}). Given the better AIC and similar outputs, we continue the tuning with the simpler model "fit3" and now move to variance parameters. 
+
+
+## Variance parameters (keyVarObs parameters)
+
+In Figure \ref{fig:resfit3}, we see that the residuals for ages 0-1 in the commercial fleet (fleet 1) are larger than for the other ages (also shown by dark blue cells in the variance plot). We therefore uncouple variances for ages 0-1 and others as follows:
+
+```{r, results='markup'}
+## Modify the configuration
+conf4 <- conf3
+conf4$keyVarObs
+conf4$keyVarObs[1,1] <- max(conf4$keyVarObs)+1
+conf4$keyVarObs[1,2] <- max(conf4$keyVarObs)+1
+conf4$keyVarObs
+```
+
+```{r fit4}
+## Fit with new configuration
+par4<-defpar(dat,conf4)
+fit4<-sam.fit(dat,conf4,par4)
+attr(fit4, "comment") <- "Uncouple variance parameters for ages 0 and 1 commercial fleet"
+```
+
+```{r, results='markup'}
+## Check new fit convergence and AIC
+fit4$sdrep
+AIC(fit3)
+AIC(fit4)
+```
+
+```{r resfit4, echo=FALSE, fig.cap="Residual diagnostic plots for the fitted object 'fit4'.", fig.dim=c(20,20)}
+## New residuals and plot
+set.seed(seed, sample.kind = "Rounding")
+res4 <- residuals(fit4)
+residplot(fit4, resid=res4)
+```
+
+```{r retrofit4, echo=FALSE, fig.cap="Retrospective patterns for the fit 'fit4'.", fig.dim=c(6,10)}
+retro4 <- retro(fit4, year = 5)
+rho4 <- mohn(retro4)
+
+par(mfrow=c(3,1))
+ssbplot(retro4, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho4[2]))), bty="n")
+fbarplot(retro4, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho4[3]))), bty="n")
+recplot(retro4, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho4[1]))), bty="n")
+
+```
+
+The AIC for "fit4" is better, residuals for ages 0 and 1 for the commercial fleet are now of a similar size as the other ages (Figure \ref{fig:resfit4}). Mohn's rho values increase slightly but are still very low (Figure \ref{fig:retrofit4}).
+
+The variance plot in Figure \ref{fig:resfit3} shows now medium significant problems for ages 1, and 8, and less so for age 2 of the commercial fleet, but age 1 is already uncoupled and this is not as clear in the bubble plot, so this is ignored for now and might be considered later on if it becomes clearer. We therefore now move to the correlation across ages for the observations.
+
+
+## Correlation across ages for observations (ObsCorStruct and keyCorObs parameters)
+
+According to the residual plots, all the surveys (except N20 that has only one age) show signs of correlation, i.e., dark blue in correlation plot and year effects in the bubble plots.
+To find the best parameterization for the correlations, we first turn the three survey fleets correlation (ObsCorStruct parameters) to "US" (i.e., unstructured) to help give an idea on how to couple the correlation parameters (keyCorObs parameter).
+
+```{r, results='markup'}
+## Modify the configuration
+conf5 <- conf4
+conf5$obsCorStruct
+conf5$obsCorStruct[c(2,3,5)] <- "US"
+conf5$obsCorStruct
+```
+
+```{r fit5}
+## Fit with new configuration
+par5<-defpar(dat,conf5)
+fit5<-sam.fit(dat,conf5,par5)
+attr(fit5, "comment") <- "Test fit with correlation 'US' for all survey fleets"
+```
+
+```{r, results='markup'}
+## Check new fit convergence and AIC
+fit5$sdrep
+AIC(fit4)
+AIC(fit5)
+# as.list(fit5$sdrep, "Est")$sigmaObsParUS
+# zx<-fit5$obj$report(par=fit5$obj$env$last.par.best)
+# lapply(zx$obsCov,cov2cor)
+# tmp1<-lapply(zx$obsCov,cov2cor)[[2]] # heras
+# colnames(tmp1) <- rownames(tmp1) <- 2:6
+# tmp1
+```
+
+```{r corfit5, echo=FALSE, fig.cap="Estimates correlations between age groups for 'fit5'.", fig.dim=c(20,20)}
+corplot(fit5)
+```
+
+Estimated correlation between age groups is shown in Figure \ref{fig:corfit5}. For HERAS, correlation between ages 3-4 and 4-5 are very similar, then slightly less strong for ages 2-3, and even less so for ages 5-6. This could, for example, motivate 2 to 3 correlation parameters for HERAS, but would increase the number of fixed parameters in the model and possibly decrease its robustness. For GERAS, correlation are slightly different between ages 1-2, and 2-3. Finally, IBTS/BITS Q1 shows correlation for the ages 3-4, and 4-5 only slightly different. There is therefore not a strong argument for having 2 correlation parameters for GERAS and IBTS/BITS Q1.
+
+There is a balance between model complexity and robustness, because correlation often brings instability to the model. Overall, Figure \ref{fig:corfit5} seems to motivate mainly one correlation parameter per survey fleet, but we could also check if a fit with two correlation parameters for HERAS (one for ages 2-3, 3-4, and 4-5, and one  for ages 5-6) could improve the fit. 
+
+First, we consider using a simple AR(1) (AutoRegressive model of order 1) for the three survey fleets as follows:
+
+```{r, results='markup'}
+## Modify the configuration
+conf6 <- conf4
+conf6$obsCorStruct
+conf6$obsCorStruct[c(2,3,5)] <- "AR"
+conf6$obsCorStruct
+conf6$keyCorObs
+conf6$keyCorObs[2,][is.na(conf6$keyCorObs[2,])] <- 0
+conf6$keyCorObs[3,][is.na(conf6$keyCorObs[3,])] <- 1
+conf6$keyCorObs[5,][is.na(conf6$keyCorObs[5,])] <- 2
+conf6$keyCorObs
+```
+
+```{r fit6}
+## Fit with new configuration
+par6<-defpar(dat,conf6)
+fit6<-sam.fit(dat,conf6,par6)
+attr(fit6, "comment") <- "Simple AR(1) for all survey fleets except N20 from fit4"
+```
+
+```{r, results='markup'}
+## Check new fit convergence and AIC
+fit6$sdrep
+AIC(fit4)
+AIC(fit6)
+```
+
+```{r corfit6, echo=FALSE, fig.cap="Estimates correlations between age groups for 'fit6'.", fig.dim=c(20,20)}
+corplot(fit6)
+```
+
+```{r resfit6, echo=FALSE, fig.cap="Residual diagnostic plots for the fitted object 'fit6'.", fig.dim=c(20,20)}
+## New residuals and plot
+set.seed(seed, sample.kind = "Rounding")
+res6 <- residuals(fit6)
+residplot(fit6, resid=res6)
+```
+
+```{r retrofit6, echo=FALSE, fig.cap="Retrospective patterns for the fit 'fit6'.", fig.dim=c(6,10)}
+retro6 <- retro(fit6, year = 5)
+rho6 <- mohn(retro6)
+
+par(mfrow=c(3,1))
+ssbplot(retro6, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho6[2]))), bty="n")
+fbarplot(retro6, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho6[3]))), bty="n")
+recplot(retro6, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho6[1]))), bty="n")
+```
+
+The AIC is better for the new fit ("fit6") compared to "fit4", and retrospective patterns are still low but slightly increased compared to "fit4" (Figure \ref{fig:retrofit6}). We can now see that most year effects have disappeared for the three survey fleets with AR(1) process in the age direction (Figure \ref{fig:resfit6}). Given the improved AIC and highly improved residuals "fit6" is considered better than "fit4". Note that there is a significant correlation across age for the commercial fleet but we want to avoid AR(1) process on commercial fleets so this is not corrected.
+
+We now try with a slightly more complex AR(1) model with one extra correlation parameter for HERAS so that the AR(1) has an irregular grid as follows:
+
+```{r, results='markup'}
+## Modify the configuration
+conf7 <- conf4
+conf7$obsCorStruct
+conf7$obsCorStruct[c(2,3,5)] <- "AR"
+conf7$obsCorStruct
+conf7$keyCorObs
+conf7$keyCorObs[2,3:5] <- 0
+conf7$keyCorObs[2,6] <- 1
+conf7$keyCorObs[3,][is.na(conf7$keyCorObs[3,])] <- 2
+conf7$keyCorObs[5,][is.na(conf7$keyCorObs[5,])] <- 3
+conf7$keyCorObs
+```
+
+```{r fit7}
+## Fit with new configuration
+par7<-defpar(dat,conf7)
+fit7<-sam.fit(dat,conf7,par7)
+attr(fit7, "comment") <- "Irregular grid AR(1) for HERAS from fit4"
+```
+
+```{r, results='markup'}
+## Check new fit convergence and AIC
+fit7$sdrep
+AIC(fit6)
+AIC(fit7)
+```
+
+```{r corfit7, echo=FALSE, fig.cap="Estimates correlations between age groups for 'fit7'.", fig.dim=c(20,20)}
+corplot(fit7)
+```
+
+```{r resfit7, echo=FALSE, fig.cap="Residual diagnostic plots for the fitted object 'fit7'.", fig.dim=c(20,20)}
+## New residuals and plot
+set.seed(seed, sample.kind = "Rounding")
+res7 <- residuals(fit7)
+residplot(fit7, resid=res7)
+```
+
+```{r retrofit7, echo=FALSE, fig.cap="Retrospective patterns for the fit 'fit7'.", fig.dim=c(6,10)}
+retro7 <- retro(fit7, year = 5)
+rho7 <- mohn(retro7)
+
+par(mfrow=c(3,1))
+ssbplot(retro7, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho7[2]))), bty="n")
+fbarplot(retro7, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho7[3]))), bty="n")
+recplot(retro7, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho7[1]))), bty="n")
+```
+
+AIC is slightly better for "fit7" than "fit6". No improvement in the residuals can be perceived with the extra parameter (Figure \ref{fig:resfit7}). Retrospective patterns are slightly increased compared to "fit6" (Figure \ref{fig:retrofit7}). While AIC is better, residuals are similar, and retrospective patterns are slightly worse, the improvements that could have motivated the extra correlation parameter are thus limited. We therefore continue with the "fit6" with simple AR(1) for HERAS, GERAS, and IBTS/BITS Q1.
+
+Figure \ref{fig:resfit6} shows the apparition of a new bias for GERAS with a succession of positive (blue) residuals for age 3. To solve this problem, we uncouple the parameters as follows:
+
+```{r, results='markup'}
+## Modify the configuration
+conf8 <- conf6
+conf8$keyLogFpar
+conf8$keyLogFpar[3,4] <- max(conf8$keyLogFpar)+1
+conf8$keyLogFpar
+```
+
+```{r fit8}
+## Fit with new configuration
+par8<-defpar(dat,conf8)
+fit8<-sam.fit(dat,conf8,par8)
+attr(fit8, "comment") <- "Uncouple ages 2 and 3 for GERAS from fit6"
+```
+
+```{r, results='markup'}
+## Check new fit convergence and AIC
+fit8$sdrep
+AIC(fit6)
+AIC(fit8)
+```
+
+```{r resfit8, echo=FALSE, fig.cap="Residual diagnostic plots for the fitted object 'fit8'.", fig.dim=c(20,20)}
+## New residuals and plot
+set.seed(seed, sample.kind = "Rounding")
+res8 <- residuals(fit8)
+residplot(fit8, resid=res8)
+```
+
+```{r retrofit8, echo=FALSE, fig.cap="Retrospective patterns for the fit 'fit8'.", fig.dim=c(6,10)}
+retro8 <- retro(fit8, year = 5)
+rho8 <- mohn(retro8)
+
+par(mfrow=c(3,1))
+ssbplot(retro8, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho8[2]))), bty="n")
+fbarplot(retro8, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho8[3]))), bty="n")
+recplot(retro8, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho8[1]))), bty="n")
+```
+
+AIC is better for "fit8" than "fit6", and the succession of positive residuals for GERAS has now disappeared (Figure \ref{fig:resfit8}) but <!-- some year effects have reappeared and -->the retrospective patterns are worsen with a Mohn's rho that has increased by 2\% for SSB and Fbar (Figure \ref{fig:retrofit8}).
+Because of better AIC and residuals, we continue with "fit8".
+
+Figure \ref{fig:resfit8} shows some new significantly larger variances (medium blue) for the commercial fleet and GERAS but these are not clear in the bubble plots, so these are ignored.
+
+Uncoupling ages 2 and 3 for GERAS leads to survey catchability parameters that are very similar for ages 1 and 2 (Figure \ref{fig:qfit8}).
+
+```{r qfit8, fig.cap="Estimated survey catchability parameters for the fit 'fit8'.", fig.dim=c(6,6)}
+qtableplot(qtable(fit8))
+```
+
+To simplify the model further, we couple ages 1 and 2 for GERAS.
+
+```{r, results='markup'}
+## Modify the configuration
+conf9 <- conf8
+conf9$keyLogFpar
+conf9$keyLogFpar[3,3] <- 2
+conf9$keyLogFpar[3,4] <- 7
+idx <- conf9$keyLogFpar[4:5,] >=0 
+conf9$keyLogFpar[4:5,][idx] <- conf9$keyLogFpar[4:5,][idx]-1
+conf9$keyLogFpar
+```
+
+```{r fit9}
+## Fit with new configuration
+par9<-defpar(dat,conf9)
+fit9<-sam.fit(dat,conf9,par9)
+attr(fit9, "comment") <- "Couple ages 1 and 2 for GERAS"
+```
+
+```{r, results='markup'}
+## Check new fit convergence and AIC
+fit9$sdrep
+AIC(fit8)
+AIC(fit9)
+```
+
+```{r qfit9, fig.cap="Estimated survey catchability parameters for the fit 'fit9'.", fig.dim=c(6,6)}
+qtableplot(qtable(fit9))
+```
+
+```{r resfit9, echo=FALSE, fig.cap="Residual diagnostic plots for the fitted object 'fit9'.", fig.dim=c(20,20)}
+## New residuals and plot
+set.seed(seed, sample.kind = "Rounding")
+res9 <- residuals(fit9)
+residplot(fit9, resid=res9)
+```
+
+```{r retrofit9, echo=FALSE, fig.cap="Retrospective patterns for the fit 'fit9'.", fig.dim=c(6,10)}
+retro9 <- retro(fit9, year = 5)
+rho9 <- mohn(retro9)
+
+par(mfrow=c(3,1))
+ssbplot(retro9, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho9[2]))), bty="n")
+fbarplot(retro9, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho9[3]))), bty="n")
+recplot(retro9, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho9[1]))), bty="n")
+```
+
+AIC for "fit9" is only slightly better than for "fit8". Residuals look very similar (Figure \ref{fig:resfit9}) and Mohn's rho are slightly improved. The model is then overall slightly improved and is simpler. We therefore continue with "fit9". 
+
+We now have a model ("fit9") that is close to be well-tuned. To be sure, we test extra configuration possibilities, i.e., mean-variance relationship and correlation for F across ages.
+
+
+## Mean-variance relationship (predVarObsLink parameter) {#predVarObs}
+
+According to Figure \ref{fig:resfit9}, the mean variance relationship [@breivik2021] might be significant (only medium blue) for the commercial catch fleet and less so for HERAS. This means that variance might differ depending on the magnitude of the catch. We test considering a mean-variance relationship for the commercial fleet:
+
+```{r, results='markup'}
+## Modify the configuration
+conf10 <- conf9
+conf10$predVarObsLink
+conf10$predVarObsLink[1,] <- 0
+conf10$predVarObsLink
+```
+
+```{r fit10}
+## Fit with new configuration
+par10<-defpar(dat,conf10)
+fit10<-sam.fit(dat,conf10,par10)
+attr(fit10, "comment") <- "Mean-variance relationship for commercial fleet"
+```
+
+```{r, results='markup'}
+## Check new fit convergence and AIC
+fit10$sdrep
+AIC(fit9)
+AIC(fit10)
+```
+
+```{r resfit10, echo=FALSE, fig.cap="Residual diagnostic plots for the fitted object 'fit10'.", fig.dim=c(20,20)}
+## New residuals and plot
+set.seed(seed, sample.kind = "Rounding")
+res10 <- residuals(fit10)
+residplot(fit10, resid=res10)
+```
+
+```{r retrofit10, echo=FALSE, fig.cap="Retrospective patterns for the fit 'fit10'.", fig.dim=c(6,10)}
+retro10 <- retro(fit10, year = 5)
+rho10 <- mohn(retro10)
+
+par(mfrow=c(3,1))
+ssbplot(retro10, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho10[2]))), bty="n")
+fbarplot(retro10, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho10[3]))), bty="n")
+recplot(retro10, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho10[1]))), bty="n")
+```
+
+```{r catchfit10, echo=FALSE, fig.cap="Retrospective patterns for the fit 'fit10'.", fig.dim=c(6,6)}
+tmp <- c("fit9"=fit9, "fit10"=fit10)
+catchplot(tmp, addCI=TRUE)
+```
+
+
+AIC is better for "fit10", no obvious changes appear for the residuals except that the significance of the mean-variance relationship has disappeared for fleet 1 and age 1 shows large variance for fleet 1 that is not clear on the bubble plot (Figure \ref{fig:resfit10}). Retrospective patterns are slightly improved. The consequence of using this configuration is that the large catches have a smaller variance and the low catches larger variance (Figure \ref{fig:catchfit10}). The consequence of using the mean-variance assumption is that the variance parameters for the commercial fleet become difficult to interpret, with very large values and large standard errors around them.
+
+Despite the fit showing slightly better results, to favour model simplicity, we go ahead with the simpler model. We therefore go ahead with "fit9" that will be likely more robust. 
+
+
+## Correlation of fishing mortality across ages (corFlag)
+
+SAM uses an AR(1) across ages by default with similar ages more highly correlated than ages that are further apart. It could be relevant to use corFlag=0 (no correlation) if correlation in F-process starts to disappear or corFlag=1 (compound symmetry, all ages are equally correlated) if the correlation is the same for all ages.
+
+```{r matplot, echo=FALSE, fig.cap="Retrospective patterns for the fit 'fit9'.", fig.dim=c(6,6)}
+matplot(y=log(faytable(fit9)), x=fit9$data$years, ylab="Log F at age", type="l", xlab="")
+for (i in 1:ncol(faytable(fit9))) text(y=log(faytable(fit9))[,i], x=fit9$data$years, labels = colnames(faytable(fit9))[i], cex = 0.7, col=i)
+toInterval <- function(x, a, b, d) {return ((b - a)/(1 + exp(-d * x)) + a)}
+
+rhocorFlag <- toInterval(fit9$pl$itrans_rho,-1,1,2)
+
+```
+
+The model estimates a high correlation in F across ages of `r round(rhocorFlag*100)`\% (see also Figure \ref{fig:matplot}). We therefore do not consider the case of no correlation but try the compound symmetry as follows:
+
+```{r, results='markup'}
+## Modify the configuration
+conf11 <- conf9
+conf11$corFlag <- 1
+```
+
+```{r fit11}
+## Fit with new configuration
+parf11<-defpar(dat,conf11)
+fit11<-sam.fit(dat,conf11,parf11)
+attr(fit11, "comment") <- "CorFlag=1 from fit9"
+```
+
+```{r, results='markup'}
+## Check new fit convergence and AIC
+fit11$sdrep
+AIC(fit9)
+AIC(fit11)
+```
+
+
+The model shows problems of convergence with a hessian that is not positive definite so we go back to the configuration for "fit9".
+
+
+## Include the IBTS/BITS Q1 estimated CVs in the model
+
+As mentioned in WD_data_prep.pdf, the CVs estimated for the IBTS/BITS Q1 indices are available. Here, we check if including them as observations in the model, so that they can be used to weight the indices improve the model outputs.
+
+Below, we create a new data sets that includes the CV estimates for IBTS/BITS Q1.
+
+```{r}
+load("data_final/ibtsbitsCV.RData")
+
+tmp <- fit9$data$aux
+tmp <- cbind(tmp, "weight"=NA)
+for (y in rownames(ibtsbitsCV)){
+  for (a in colnames(ibtsbitsCV)){
+    tmp[which(tmp[, "fleet"]==which(attr(fit9$data, "fleetNames")=="IBTS/BITSQ1") & tmp[,"year"]==y & tmp[,"age"]==a),]["weight"] <- (1/ibtsbitsCV[y, which(colnames(ibtsbitsCV)==a),]^2)
+  }
+}
+
+datCV <- dat
+datCV$weight <- tmp[,"weight"]
+```
+
+```{r fit12}
+## Fit with new configuration
+par12<-defpar(datCV,conf9)
+fit12<-sam.fit(datCV,conf9,par12)
+attr(fit12, "comment") <- "Add CVs for IBTS/BITS Q1 from fit9"
+```
+
+```{r, results='markup'}
+## Check new fit convergence and AIC
+fit12$sdrep
+AIC(fit9)
+AIC(fit12)
+```
+
+```{r resfit12, echo=FALSE, fig.cap="Residual diagnostic plots for the fitted object 'fit12'.", fig.dim=c(20,20)}
+## New residuals and plot
+set.seed(seed, sample.kind = "Rounding")
+res12 <- residuals(fit12)
+residplot(fit12, resid=res12)
+```
+
+```{r retrofit12, echo=FALSE, fig.cap="Retrospective patterns for the fit 'fit12'.", fig.dim=c(6,10)}
+retro12 <- retro(fit12, year = 5)
+rho12 <- mohn(retro12)
+
+par(mfrow=c(3,1))
+ssbplot(retro12, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho12[2]))), bty="n")
+fbarplot(retro12, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho12[3]))), bty="n")
+recplot(retro12, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho12[1]))), bty="n")
+```
+
+AIC and retrospective patterns are improved with the new "fit12" (Figure \ref{fig:retrofit12}). Residuals are also still good (Figure \ref{fig:resfit12}). 
+
+It is recommended to use the CVs if they are available and improve the model outputs. First, because the variance around the indices in SAM is time invariant. However, for a given trawl, the number of hauls and spatial coverage are variable each year so the variance of the indices might change and this will not be considered by default in SAM. In addition, from 2026 the North Sea IBTS will start introducing a new survey gear to gradually replace the GOV used until now. This could increase the CV in the transition period, where extra gear conversion factors may be needed. Having the CVs as extra information for the model might therefore help in the future.
+
+We therefore conclude that considering the CVs from the survey model is improving the model and we continue with the new data set.
+
+```{r}
+dat <- datCV
+```
+
+<!-- ## Summary of all the fits evaluated during tuning -->
+
+```{r, echo=FALSE}
+tmp <- ls()[grep("fit", ls())]
+fits_names <- stringi::stri_sort(tmp, numeric=TRUE)
+fits_names[1] <- tmp[2]
+fits_names[2] <- tmp[1]
+rhos <- paste0("rho", gsub("fit", "", fits_names))
+toextract <- c("Number of parameters", "Convergence", "AIC", "Mohn's rho SSB", "Mohn's rho Fbar", "Comments")
+table_out <- matrix(NA, nrow=length(fits_names), ncol=length(toextract), dimnames = list(fits_names, toextract))
+
+for(i in seq(fits_names)){
+  table_out[i,] <- c(length(get(fits_names[i])$sdrep$par.fixed),
+                     get(fits_names[i])$opt$convergence==0,
+                     round(AIC(get(fits_names[i]))),
+                     tryCatch(round(get(rhos[i])[2:3]*100), error=function(err) rep(NA, 2)),
+                     attr(get(fits_names[i]), "comment"))
+                     
+}
+```
+
+```{r summary, echo=FALSE, results='markup'}
+library(kableExtra)
+kable(table_out, "latex", booktabs = T, caption = "Summary of the fits obtained during tuning.") %>%
+kable_styling(latex_options = c("striped", "scale_down"))
+```
+
+We have now a model "fit12" that seems satisfactory. Table \ref{tab:summary} summarizes the main outputs of the different fits obtained during the tuning until now.
+
+
+Two final steps are needed for obtaining the final model. Indeed, we would like to do a final fine-tuned profiling of M with the tuned model. We are also interested in estimating reference points in SAM [@albertsen2020; @trijoulet2022msy]. In this case, the model should include a stock-recruitment relationship (SRR). It is therefore necessary to investigate the consequences for the model. Before we look at these two points, we would like to check the tuning for the model is best up to this point.
+
+```{r}
+tmp <- paste0("save(", paste(fits_names, collapse = ","), ", file='results/fits_tuning_sf.RData')")
+eval(parse(text=tmp)) 
+```
+
+\clearpage
+
+# Compare tuning between individuals
+
+Anders Nielsen and Casper Berg have also tuned the model on their own up to this point. For simplicity, I have provided them with the fit from stockassessment.org, with new Fbar range, new M from profiling, and CVs on IBTS/BITS Q1 as starting point for their own tuning (see below) to be sure they use the same data as me.
+
+```{r, eval=FALSE}
+library(stockassessment)
+fit <- fitfromweb("WBSS_HAWG_2025_sf_benchmark") # fit with new data and default configuration 
+conf <- fit$conf
+conf$fbarRange <- c(2,5) # new Fbar range
+dat <- fit$data
+dat$natMor <- dat$natMor*2 # new M after first profiling
+## Add CVs for IBTS/BITS Q1 ##
+load("data_final/ibtsbitsCV.RData")
+tmp <- fit$data$aux
+tmp <- cbind(tmp, "weight"=NA)
+for (y in rownames(ibtsbitsCV)){
+  for (a in colnames(ibtsbitsCV)){
+    tmp[which(tmp[, "fleet"]==which(attr(fit$data, "fleetNames")=="IBTS/BITSQ1") & tmp[,"year"]==y & tmp[,"age"]==a),]["weight"] <- (1/ibtsbitsCV[y, which(colnames(ibtsbitsCV)==a),]^2)
+  }
+}
+dat$weight <- tmp[,"weight"]
+###############################
+par <- defpar(dat, conf)
+fit0 <- sam.fit(dat,conf,par) # fit to start tuning from
+```
+
+The interesting part of this exercise is to compare the configuration and fits obtained by three different persons. Differences are expected, notably because tuning techniques might differ person to person but also because some choices are difficult to make and therefore a bit subjective. For example, we were unsure we made the correct decisions when choosing "fit6" rather than "fit7", "fit8" rather than "fit6", and "fit9" rather than "fit10".
+
+## Difference in configuration and main diagnostics between the three fits
+
+```{r}
+# Casper's and Anders fits
+load("results/fitCasper.RData") # Best fit according to Casper
+fitCasper <- stockassessment:::refit(fitCasper)
+attr(fitCasper, "comment") <- "Casper's best model"
+set.seed(seed, sample.kind = "Rounding")
+resCasper <- residuals(fitCasper)
+retroCasper <- retro(fitCasper, year = 5)
+rhoCasper <- mohn(retroCasper)
+
+load("results/fitAnders.RData") # Best fit according to Anders
+fitAnders <- stockassessment:::refit(fitAnders)
+attr(fitAnders, "comment") <- "Anders's best model"
+set.seed(seed, sample.kind = "Rounding")
+resAnders <- residuals(fitAnders)
+retroAnders <- retro(fitAnders, year = 5)
+rhoAnders <- mohn(retroAnders)
+
+# Calculate retro for 10 peels for all fits:
+retroCasper10 <- retro(fitCasper, year = 10)
+rhoCasper10 <- mohn(retroCasper10)
+retroAnders10 <- retro(fitAnders, year = 10)
+rhoAnders10 <- mohn(retroAnders10)
+retro1210 <- retro(fit12, year = 10)
+rho1210 <- mohn(retro1210)
+# check convergence
+sapply(retro1210, function(x) x$opt$convergence==0)
+sapply(retroAnders10, function(x) x$opt$convergence==0)
+sapply(retroCasper10, function(x) x$opt$convergence==0)
+
+
+AICc<-function(fit){
+  nlogl <- fit$opt$objective
+  k <- length(fit$opt$par)
+  n <- fit$data$nobs
+  2*nlogl + 2*k + 2*k*(k+1)/(n-k-1); 
+}
+
+
+# Find the difference in configurations
+diffConf1 <- names(setdiff(conf9, fitCasper$conf)) # same for Anders
+diffConf1 <- diffConf1[-3] # "keyCorObs" ordering is different but not conf
+diffConf2 <- names(setdiff(conf9, fitAnders$conf))
+diffConf2 <- diffConf2[-2] # "obsCorStruct" false difference because AR for N20 is same as ID
+diffConf <- C(diffConf1, diffConf2)
+diffConf <- as.vector(diffConf[!duplicated(diffConf)])
+
+# Convert matrix to LaTeX representation
+mat_to_latex <- function(m) {
+  rows <- apply(m, 1, function(r) paste(r, collapse = " & "))
+  paste0("$\\begin{matrix}", paste(rows, collapse = " \\\\ "), "\\end{matrix}$")
+}
+
+tmpV <- c()
+tmpC <- c()
+tmpA <- c()
+for (j in 1:length(diffConf)){
+ tmpV <- c(tmpV, mat_to_latex(conf9[[diffConf[j]]]))
+ tmpC <- c(tmpC, mat_to_latex(fitCasper$conf[[diffConf[j]]]))
+ tmpA <- c(tmpA, mat_to_latex(fitAnders$conf[[diffConf[j]]]))
+}
+df <- data.frame(
+  Parameters = diffConf,
+  Vanessa = tmpV,
+  Casper = tmpC,
+  Anders = tmpA
+) 
+
+
+# Compare diagnostics for the three fits
+tocompare <- c("fit12", "fitCasper", "fitAnders") 
+rhos <- paste0("rho", gsub("fit", "", tocompare))
+rhos10 <- paste0(rhos, 10)
+toextract <- c("Number of parameters", "Convergence", "AIC", "AICc", "Mohn's rho SSB (5)", "Mohn's rho Fbar (5)", "Mohn's rho SSB (10)", "Mohn's rho Fbar (10)")
+table_diff <- matrix(NA, nrow=length(tocompare), ncol=length(toextract), dimnames = list(c("Vanessa", "Casper", "Anders"), toextract))
+
+for(i in seq(tocompare)){
+  table_diff[i,] <- c(length(get(tocompare[i])$sdrep$par.fixed),
+                     get(tocompare[i])$opt$convergence==0,
+                     round(AIC(get(tocompare[i]))),
+                     round(AICc(get(tocompare[i]))),
+                     tryCatch(round(get(rhos[i])[2:3]*100,2), error=function(err) rep(NA, 2)),
+                     tryCatch(round(get(rhos10[i])[2:3]*100,2), error=function(err) rep(NA, 2))
+                     )
+                     
+}
+```
+
+
+```{r confdif, echo=FALSE, results='asis'}
+#knitr::kable(df, escape=FALSE, booktabs=TRUE , caption = "Difference in configuration between Vanessa, Casper, and Anders.") 
+kable(df, escape = FALSE, format = "latex", booktabs = FALSE, caption = "Difference in configuration between Vanessa, Casper, and Anders.") %>%
+  kable_styling(latex_options = c("bordered", "scale_down")) %>%
+  landscape()    
+```
+
+```{r qall, echo=FALSE, fig.cap="Estimated survey catchability for the three fits.", fig.dim=c(10,4)}
+par(mfrow=c(1,3))
+qplot(fit12, main="Vanessa")
+qplot(fitCasper, main="Casper")
+qplot(fitAnders, main="Anders") 
+```
+
+
+```{r summarydif, echo=FALSE, results='markup'}
+library(kableExtra)
+kable((table_diff), "latex", booktabs = T, caption = "Main diagnostics for the three fits.") %>%
+kable_styling(latex_options = c("striped", "scale_down"))  
+```
+
+The differences in configuration are shown in Table \ref{tab:confdif}. Here we can see that Vanessa and Anders chose very similar configurations. The only difference is that Vanessa has coupled ages 1 and 2 for GERAS and not Anders (see also Figure \ref{fig:qall}). Vanessa's fit has less parameters, better AIC, AICc, and Mohn's rhos than Anders' fit (Table \ref{tab:summarydif}). It seems therefore Vanessa's fit might be better. 
+
+The difference between Vanessa's fit and Casper's fit is that Casper has not coupled the catchability parameters for HERAS and GERAS, and Casper has used the mean-variance relationship. This latter was not chosen by Vanessa but was one of the choices that were difficult to make and was motivated to keep model simplicity (cf. section \ref{predVarObs}). Casper's model has more parameters than Vanessa's, has worse AIC and AICc, but has slightly better Mohn's rhos. It's likely that Vanessa's model with the mean-variance relationship on for the commercial fleet would give the best result for all the diagnostics.
+
+
+```{r retro1210, echo=FALSE, fig.cap="Retrospective patterns for 10 peels for Vanessa's fit 'fit12'.", fig.dim=c(6,10)}
+par(mfrow=c(3,1))
+ssbplot(retro1210, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho1210[2]))), bty="n")
+fbarplot(retro1210, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho1210[3]))), bty="n")
+recplot(retro1210, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho1210[1]))), bty="n")
+```
+
+```{r retroCasper10, echo=FALSE, fig.cap="Retrospective patterns for 10 peels for Casper's.", fig.dim=c(6,10)}
+par(mfrow=c(3,1))
+ssbplot(retroCasper10, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rhoCasper10[2]))), bty="n")
+fbarplot(retroCasper10, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rhoCasper10[3]))), bty="n")
+recplot(retroCasper10, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rhoCasper10[1]))), bty="n")
+```
+
+```{r retroAnders10, echo=FALSE, fig.cap="Retrospective patterns for 10 peels for Anders's.", fig.dim=c(6,10)}
+par(mfrow=c(3,1))
+ssbplot(retroAnders10, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rhoAnders10[2]))), bty="n")
+fbarplot(retroAnders10, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rhoAnders10[3]))), bty="n")
+recplot(retroAnders10, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rhoAnders10[1]))), bty="n")
+```
+
+```{r fitplotV, echo=FALSE, fig.cap="Fit for all fleets for Vanessa's fit 'fit12'.", fig.dim=c(10,10)}
+fitplot(fit12)
+```
+
+```{r fitplotC, echo=FALSE, fig.cap="Fit for all fleets for Casper's fit.", fig.dim=c(10,10)}
+fitplot(fitCasper)
+```
+
+```{r fitplotA, echo=FALSE, fig.cap="Fit for all fleets for Anders's fit.", fig.dim=c(10,10)}
+fitplot(fitAnders)
+```
+
+
+Figures \ref{fig:retro1210}-\ref{fig:retroAnders10} show the retrospective patterns for 10 peels, and Figures \ref{fig:fitplotV}-\ref{fig:fitplotA} show the fit for each fleet. Both outputs are very similar between the three fits. Note that the 1992 index for N20 is very low compared to the others at the beginning of the time series. The model does not fit to it. It could be relevant to remove the index but it does not seem to affect the fits much.
+
+We now perform additional diagnostics to test the robustness of the three models in the following sections.
+
+
+## Leave one survey out
+
+This analysis looks at the impact of removing one survey at a time as data in the model, which is a common diagnostic used for SAM models. All the obtained fits have similar leave one out results, with very good results were all the fits are contained within the confidence interval of the outputs, showing no conflict between the surveys (Figures \ref{fig:LO12}-\ref{fig:LOAnders}). Casper's fit shows a larger impact of removing HERAS than the other two fits. We could wonder if this could worsen as we add data in the future and could potentially become a problem.
+
+```{r, results='markup'}
+LO12 <- leaveout(fit12)
+sapply(LO12, function(x) x$opt$convergence==0) # check convergence
+
+LOCasper <- leaveout(fitCasper)
+sapply(LOCasper, function(x) x$opt$convergence==0)
+
+LOAnders <- leaveout(fitAnders)
+sapply(LOAnders, function(x) x$opt$convergence==0) 
+
+```
+
+```{r LO12, echo=FALSE, fig.cap="Leave one survey out plot for Vanessa's fit 'fit12'.", fig.dim=c(10,10)}
+plot(LO12)
+```
+
+```{r LOCasper, echo=FALSE, fig.cap="Leave one survey out plot for Casper's fit.", fig.dim=c(10,10)}
+plot(LOCasper)
+```
+
+```{r LOAnders, echo=FALSE, fig.cap="Leave one survey out plot for Anders's fit.", fig.dim=c(10,10)}
+plot(LOAnders)
+```
+
+
+## Jitter test
+
+This test re-runs the model for different starting values to investigate the robustness of the model to initial parameters.
+
+```{r, results='markup'}
+fn <- function(x){
+  if ("jitflag" %in% names(attributes(x))) {
+    fit <- attr(x, "fit")
+    maxabsdiff <- apply(abs(do.call(cbind, lapply(x, function(f) unlist(f$pl) - unlist(fit$pl)))), 1, max)
+    maxlist <- relist(maxabsdiff, fit$pl)
+    ret <- as.data.frame(unlist(lapply(maxlist, function(x) if (length(x) > 0) max(x) else NULL)))
+    fbar <- max(unlist(lapply(x, function(f) abs(fbartable(f)[, 1] - fbartable(fit)[, 1]))))
+    ssb <- max(unlist(lapply(x, function(f) abs(ssbtable(f)[, 1] - ssbtable(fit)[, 1]))))
+    rec <- max(unlist(lapply(x, function(f) abs(rectable(f)[, 1] - rectable(fit)[, 1]))))
+    catch <- max(unlist(lapply(x, function(f) abs(catchtable(f)[, 1] - catchtable(fit)[, 1]))))
+    logLik <- max(abs(unlist(lapply(x, logLik)) - logLik(fit)))
+    ret <- rbind(ret, ssb = ssb, fbar = fbar, rec = rec, catch = catch, logLik = logLik)
+    names(ret) <- "max(|delta|)"
+    (ret)
+  }
+}
+
+fn1 <- function(x) max(fn(x)[-which(rownames(fn(x)) %in% c("logFScaleMSY", "implicitFunctionDelta", "splinePenalty" )),])
+
+
+set.seed(seed, sample.kind = "Rounding")
+jitVanessa <- jit(fit12, nojit = 10)
+jitCasper <- jit(fitCasper, nojit = 10)
+jitAnders <- jit(fitAnders, nojit = 10)
+
+# max difference in decreasing order:
+apply(cbind("Vanessa"=fn1(jitVanessa), "Casper"= fn1(jitCasper), "Anders"= fn1(jitAnders)),1,sort)
+```
+
+The jitter tests show perfect robustness for all models (see also Figures \ref{fig:jitV}-\ref{fig:jitA}). Ander's model shows the smallest maximal difference in outputs, then Vanessa's, and finally Casper's.
+
+```{r jitV, echo=FALSE, fig.cap="Jitter Test outputs for Vanessa's fit 'fit12'.", fig.dim=c(10,10)}
+plot(jitVanessa)
+```
+
+```{r jitC, echo=FALSE, fig.cap="Jitter Test outputs for Casper's fit.", fig.dim=c(10,10)}
+plot(jitCasper)
+```
+
+```{r jitA, echo=FALSE, fig.cap="Jitter Test outputs for Anders's fit.", fig.dim=c(10,10)}
+plot(jitAnders)
+```
+
+
+## Simulation study
+
+This test simulates data according to the fitted model and re-estimates the parameters for each replicate.
+
+```{r, results='markup'}
+set.seed(seed, sample.kind = "Rounding")
+simVanessa <- simstudy(fit12, 20)
+simCasper <- simstudy(fitCasper, 20)
+simAnders <- simstudy(fitAnders, 20)
+sum(sapply(simVanessa, function(x) x$opt$convergence==0))
+sum(sapply(simCasper, function(x) x$opt$convergence==0))
+sum(sapply(simAnders, function(x) x$opt$convergence==0))
+```
+
+```{r simV, echo=FALSE, fig.cap="Simulation study outputs for Vanessa's fit 'fit12'.", fig.dim=c(10,10)}
+plot(simVanessa)
+```
+
+```{r simC, echo=FALSE, fig.cap="Simulation study outputs for Casper's fit.", fig.dim=c(10,10)}
+plot(simCasper)
+```
+
+```{r simA, echo=FALSE, fig.cap="Simulation study outputs for Anders's fit.", fig.dim=c(10,10)}
+plot(simAnders)
+```
+
+From the 20 simulations, one has not converged for Vanessa's fit, and all have converged for the others. This is within 5\% non-convergence so it is acceptable.
+Outputs are within the confidence intervals for all fits (Figures \ref{fig:simV}-\ref{fig:simA}).
+
+All three models show an instability in the variance parameter for the process error around survival that sometimes goes to very low values (i.e., no error around survival equation). This was also observed recently with the current assessment model. This means that in future updates it is possible that the parameter will tend to 0 leading to a non-convergence. This is not a problem now, and perfect survival is not an option in SAM. This means that we should keep in mind that in the future, it is possible that we might have to fix the parameter to a low value to avoid non-convergence.
+
+
+## Conclusion on best configuration
+
+The three fits are all well-tuned, robust, and present good model diagnostics. Vanessa's model is the simplest, has best AIC and AICc but slightly larger retrospective patterns than Casper's. 
+
+A compromise could be to use a new model that with Vanessa's configuration but add the mean-variance relationship for the commercial fleet, choice that was dismissed in section despite good outputs. This is not shown here but this new model configuration was tested ("fit13"). while this new model performs well for most diagnostics, it does show some instability so it is not used here. The model has been saved and can be provided if of interest.
+
+In conclusion, we favor the simplest model and continue with Vanessa's model "fit12".
+
+
+# Investigate age ranges for HERAS and GERAS surveys.
+
+As mentioned in the WD_data_prep.pdf document, at the DEWK it was agreed to potentially consider removing age 2 for HERAS and age 3 for GERAS if it could reduce the conflict between the surveys. The leave one out analysis shows that there is limited conflict between the surveys and the retrospective patterns are good, we therefore conclude that there is no good arguments for removing these ages from the data anymore. We thus choose to not investigate changing the surveys' age range as initially intended further.
+
+
+\clearpage
+
+# Final fine-tuned profiling of the natural mortality
+
+We now perform a final profiling of M to fine-tune the multiplier with the model with best configuration "fit12". We use a finer step for the multiplier (0.01 instead of 0.1 used in the first profiling). 
+Here we chose to do this before testing for an SRR because this latter can be difficult to estimate and therefore affect the profiling.
+
+```{r}
+profFits <- list()
+x2 <- seq(0.95,1.15, by=.01)
+
+p2 <- Vectorize(profileM, vectorize.args = "x")(x = x2, fit = fit12)
+
+bestFit2 <- profFits[[which(p2==max(p2))]]
+```
+
+```{r profiling2, echo=FALSE, fig.cap="Profiling of natural mortality for the fit 'fit12'. The points represent the log-likelihood value for each model run. The best model is therefore the one with the largest value", fig.dim=c(6,6)}
+plot(p2~x2, ylab="Log-likelihood")
+abline(v=x2[which(p2==max(p2))])
+```
+
+Here the profiling exercise concludes that M should be `r x2[which(p2==max(p2))]` times the M of the chosen model or `r x2[which(p2==max(p2))]*x[which(p==max(p))]` times the original M to get the best fit (Figure \ref{fig:profiling2}). This means M over time is as follows:
+
+```{r, results='markup'}
+finalM <- bestFit2$data$natMor
+finalM[1,]
+# to use for multifleet model for stockassessment.org:
+write.table(finalM, file="results/M_profiled_sf.dat", row.names = FALSE)
+```
+
+To check that the new Ms do not produce an unexpected behavior, we reproduce all the diagnostics as follows:
+
+```{r}
+# problem with map argument in bestFit2 so we refit the model:
+fitFinal <- stockassessment:::refit(bestFit2)
+attr(fitFinal, "comment") <- "Final profiling M from fit12"
+dat <- fitFinal$data
+save(fitFinal, file="results/fitFinal.RData") 
+```
+
+```{r, results='markup'}
+fitFinal$sdrep
+AIC(fitFinal)
+```
+
+```{r resfitFinal, echo=FALSE, fig.cap="Residual diagnostic plots for the fitted object 'fitFinal'.", fig.dim=c(20,20)}
+## New residuals and plot
+set.seed(seed, sample.kind = "Rounding")
+resFinal <- residuals(fitFinal)
+residplot(fitFinal, resid=resFinal)
+```
+
+```{r retrofitFinal, echo=FALSE, fig.cap="Retrospective patterns for fit 'fitFinal' for 10 peels.", fig.dim=c(6,10)}
+retroFinal <- retro(fitFinal, year = 5)
+rhoFinal <- mohn(retroFinal)
+retroFinal10 <- retro(fitFinal, year=10)
+rhoFinal10 <- mohn(retroFinal10)
+
+par(mfrow=c(3,1))
+ssbplot(retroFinal10, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rhoFinal10[2]))), bty="n")
+fbarplot(retroFinal10, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rhoFinal10[3]))), bty="n")
+recplot(retroFinal10, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rhoFinal10[1]))), bty="n")
+```
+
+```{r, results='markup'}
+LOFinal <- leaveout(fitFinal)
+sapply(LOFinal, function(x) x$opt$convergence==0) # check convergence
+```
+
+```{r LOFinal, echo=FALSE, fig.cap="Leave one survey out plot for fit 'fitFinal'.", fig.dim=c(10,10)}
+plot(LOFinal)
+```
+
+```{r, results='markup'}
+set.seed(seed, sample.kind = "Rounding")
+jitFinal <- jit(fitFinal, nojit = 10)
+
+# max difference in decreasing order:
+fn1(jitFinal)
+```
+
+```{r jitFinal, echo=FALSE, fig.cap="Jitter Test outputs for fit 'fitFinal'.", fig.dim=c(10,10)}
+plot(jitFinal)
+```
+
+```{r, results='markup'}
+set.seed(seed, sample.kind = "Rounding")
+simFinal <- simstudy(fitFinal, 20)
+sum(sapply(simFinal, function(x) x$opt$convergence==0))
+```
+
+```{r simFinal, echo=FALSE, fig.cap="Simulation study outputs for fit 'fitFinal'.", fig.dim=c(10,10)}
+plot(simFinal)
+```
+
+The final model presents good diagnostics in terms of residuals (Figure \ref{fig:resfitFinal}), retrospective patterns (Figure \ref{fig:retrofitFinal}), leave one out (Figure \ref{fig:LOFinal}), jitter test (Figure \ref{fig:jitFinal}), and simulation study (Figure \ref{fig:simFinal}).
+
+\clearpage
+
+# Estimate a stock-recruitment relationship
+
+To allow the estimation of reference point in SAM, a stock-recruitment relationship needs to be estimated in the model. 
+
+```{r srfit12, echo=FALSE, fig.cap="Stock-recruitment pairs for the fitted object 'fitFinal'.", fig.dim=c(6,6)}
+srplot(fitFinal)
+```
+
+The stock-recruitment pairs indicate that the stock-recruitment relationship (SRR) present a possible asymptote from around an SSB of 300,000 t, so could be a hockey-stick or Beverton-Holt. We therefore try both, starting with Beverton-Holt, as follows:
+
+```{r, results='markup'}
+## Modify the configuration
+conf14 <- fitFinal$conf
+conf14$stockRecruitmentModelCode <- 2 # Beverton-Holt
+```
+
+```{r fit14}
+## Fit with new configuration
+par14<-defpar(dat,conf14)
+fit14<-sam.fit(dat,conf14,par14)
+attr(fit14, "comment") <- "Beverton-Holt SRR from fitFinal"
+```
+
+```{r, results='markup'}
+## Check new fit convergence and AIC
+fit14$sdrep
+AIC(fitFinal)
+AIC(fit14)
+```
+
+```{r srfit14, echo=FALSE, fig.cap="Stock-recruitment pairs for the fitted object 'fit14'.", fig.dim=c(6,6)}
+srplot(fit14, xlim=c(0,15E+5), ylim=c(0, 2E+8))
+```
+
+The model converges but the estimated SRR is a straight line going up within and beyond the magnitude of the estimates, also shown by the large standard error on one of the SRR parameters (Figure \ref{fig:srfit14}). This model can thus not be used to estimate reference points.
+
+We now try with a hockey-stick SRR:
+
+```{r, results='markup'}
+## Modify the configuration
+conf15 <- fitFinal$conf
+conf15$stockRecruitmentModelCode <- 61 # Hockey-stick
+```
+
+```{r fit15}
+## Fit with new configuration
+par15<-defpar(dat,conf15)
+fit15<-sam.fit(dat,conf15,par15)
+attr(fit15, "comment") <- "Hockey-stick SRR from fitFinal"
+```
+
+```{r, results='markup'}
+## Check new fit convergence and AIC
+fit15$sdrep
+AIC(fitFinal)
+AIC(fit15)
+```
+
+<!-- Note that, for the model to converge, we had to change slightly the initial parameters, which is not ideal.  -->
+As expected, the AIC of the model with an SRR is not as good as the model using random walk on recruitment. However, the resulting SRR parameters are estimated with relatively good standard errors, which is quite rare in our experience.
+
+```{r srfit15, echo=FALSE, fig.cap="Stock-recruitment pairs for the fitted object 'fit15'. The solid line and shaded area show the estimated stock-recruitment curve and its 95% confidence interval. The dashed lines show the predicted confidence intervals used for simulations.", fig.dim=c(6,6)}
+srplot(fit15)
+addRecruitmentCurve(fit15, CI=FALSE, PI=TRUE)
+```
+
+The resulting SRR is reasonable (Figure \ref{fig:srfit15}).
+
+```{r resfit15, echo=FALSE, fig.cap="Residual diagnostic plots for the fitted object 'fit15'.", fig.dim=c(20,20)}
+## New residuals and plot
+set.seed(seed, sample.kind = "Rounding")
+res15 <- residuals(fit15)
+residplot(fit15, resid=res15)
+```
+
+```{r retrofit15, echo=FALSE, fig.cap="Retrospective patterns for the fit 'fit15'.", fig.dim=c(6,10)}
+retro15 <- retro(fit15, year = 5)
+rho15 <- mohn(retro15)
+retro1510 <- retro(fit15, year = 10)
+rho1510 <- mohn(retro1510)
+
+par(mfrow=c(3,1))
+ssbplot(retro1510, las=0)
+legend("topright", legend=substitute(rho[Mohn](10)==RR~'%'~~~rho[Mohn](5)==RRR~'%', list(RR=round(100*rho1510[2]), RRR=round(100*rho15[2]))), bty="n")
+fbarplot(retro15, las=0)
+legend("topright", legend=substitute(rho[Mohn](10)==RR~'%'~~~rho[Mohn](5)==RRR~'%', list(RR=round(100*rho1510[3]), RRR=round(100*rho15[3]))), bty="n")
+recplot(retro15, las=0)
+legend("topright", legend=substitute(rho[Mohn](10)==RR~'%'~~~rho[Mohn](5)==RRR~'%', list(RR=round(100*rho1510[1]), RRR=round(100*rho15[1]))), bty="n")
+```
+
+The residuals look good (Figure \ref{fig:resfit15}). Mohn's rho are though doubled for "fit15" compared to "fitFinal" but are still reasonable with `r round(rho15["SSB"]*100)`\% for SSB, and `r round(rho15["Fbar(2-5)"]*100)`\% for Fbar for 5 peels. 
+
+Estimating the reference points within the model would help consistency between assessment and reference points over the years. Having a stock-recruitment relationship is therefore considered important, and can motivate choosing the "fit15" as final assessment model.
+
+In principle, if an SRR is used in the model, the reference points should be estimated every year to avoid discrepancy when a new SRR is potentially estimated at each update. However, our personal experience is that using an SRR decreases model's robustness. There is therefore a risk that the model does not converge in the future after updating the data. A possibility to solve this instability problem could be to fix the SRR parameters in future assessment updates. As a result, the reference points could also be kept constant between benchmarks, which is the current method used in ICES for most stocks. 
+
+
+# Summary of all the fits
+
+```{r, echo=FALSE}
+fits_names <- c("fitCasper", "fitAnders", "fitFinal", "fit14", "fit15")
+rhos <- paste0("rho", gsub("fit", "", fits_names))
+toextract <- c("Number of parameters", "Convergence", "AIC", "Mohn's rho SSB", "Mohn's rho Fbar", "Comments")
+table_out2 <- matrix(NA, nrow=length(fits_names), ncol=length(toextract), dimnames = list(fits_names, toextract))
+
+for(i in seq(fits_names)){
+  table_out2[i,] <- c(length(get(fits_names[i])$sdrep$par.fixed),
+                     get(fits_names[i])$opt$convergence==0,
+                     round(AIC(get(fits_names[i]))),
+                     tryCatch(round(get(rhos[i])[2:3]*100), error=function(err) rep(NA, 2)),
+                     attr(get(fits_names[i]), "comment"))
+                     
+}
+table_outALL <- rbind(table_out,table_out2)
+```
+
+```{r summary2, echo=FALSE, results='markup'}
+library(kableExtra)
+kable(table_outALL, "latex", booktabs = T, caption = "Summary of the all the fits tested in this WD.") %>%
+kable_styling(latex_options = c("striped", "scale_down")) 
+```
+
+Table \ref{tab:summary2} summarizes the main diagnostics for all the fits mentioned in the document. If we were to choose the single fleet model as assessment model, we propose to use "fit15" to allow internal estimation of reference points in SAM.
+
+
+# References
+

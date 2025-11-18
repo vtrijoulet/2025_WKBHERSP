@@ -1,0 +1,439 @@
+---
+title: "Working document: Preparation of data for the new WBSS herring model"
+author: Vanessa Trijoulet
+output: 
+  bookdown::pdf_document2: default
+bibliography: refs.bib
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, results='hide', tidy.opts=list(width.cutoff=I(90)), tidy=TRUE, cache = FALSE)
+seed <- 1234
+dir.create("data_final")
+library(stockassessment)
+fitsf <- fitfromweb("WBSS_HAWG_2025_sf")
+fitmf <- fitfromweb("WBSS_HAWG_2025")
+```
+
+This working document summarizes how the data was prepared to be used in the WBSS herring assessment model. The final data is presented in Tables that can be used to check inputs to the model.
+
+# Survey data
+
+## Summary of the decisions made prior to the benchmark meeting
+
+At the Data Evaluation WorKshop (DEWK) in September 2025, choices were made regarding the survey data to use in the new model for Western Baltic Spring Spawners (WBSS) herring. The summary of these conclusions are as follows:
+
+1. HERAS, ages 2-6+, 1991-2024.  
+While the HERAS survey was not updated for the benchmark, internal and external consistency led to changing ages to considered from 3-5 to 2-6+. The catchability on age 2 should be checked because it might not be fully covered in the survey.
+
+2. GERAS, ages 1-3, 1994-2024, excluding not fully covered rectangles in SDs 21 and 24 for 2010-2024.  
+Prior to the benchmark, GERAS indices used where for 1994-2024 and ages 1-4. 
+GERAS indices for 2010-2024 were updated. The new GERAS indices should include the old indices for 1994-2009 and the new ones excluding not fully covered rectangles in SDs 21 and 24 for 2010-2024. Ages 1-3 should be considered but 1-2 should also be tested.
+
+3. New N20 indices, age 0, 1992-2024.  
+N20 indices were updated to notably account for larval natural mortality. These new indices will be used.
+
+4. New IBTS/BITS Q1, ages 3-5+, 2002-2024.  
+The indices were updated to include ages in the BITS survey and apply the separation function as in GERAS. The new indices come from the model 14.
+
+5. No IBTS/BITS Q3-4.  
+While the old model used IBTS/BITS Q3-4 indices in 2002-2024 and ages 2-3. The new indices were deemed uninformative at the DEWK so are not considered in the new model.
+
+
+
+## HERAS
+
+Here we recompute the ages for HERAS so that ages 2-6+ are used:
+
+```{r, results='markup'}
+load("data_init/HERAS.RData") # in millions
+head(heras)
+
+# Make 6+:
+heras[,"6"] <- apply(heras[,c("6", "7", "8+")],1,sum, na.rm=TRUE)
+head(heras)
+
+herasNew <- heras[,as.character(2:6)]*1000 # in thousand
+herasNew["1999",] <- NA # such as currently???
+```
+
+In the old data, 1999 indices were ignored due to different survey area coverage [@ICES2025hawg]. We do the same here as was done until now.
+
+```{r heras, echo=FALSE, results='markup'}
+knitr::kable(herasNew, caption = "HERAS indices (thousand) used in the WBSS herring model. Last age is a plus group.")
+```
+
+```{r}
+# prepare to copy to .dat
+attr(herasNew, "name") <- "HERAS"
+attr(herasNew, "years") <- c(min(rownames(herasNew)), max(rownames(herasNew)))
+attr(herasNew, "unit") <- "thousand"
+attr(herasNew, "plusgroup") <- "yes"
+save(herasNew, file="data_final/HERAS.RData")
+herasNew <- cbind(rep(1, nrow(herasNew)), herasNew) # in thousand
+write.table(herasNew, file="data_final/HERAS.dat", row.names = FALSE)
+```
+
+The HERAS indices used in the WBSS herring model are reported in Table \ref{tab:heras}.
+
+
+## GERAS
+
+Note that after the DEWK, two small issues were found when using the age-length key in StoX and in the 2023 and 2024 data sets, so some modifications were made and the index was recalculated. this led to only small changes in the index compared to the one considered during the DEWK. 
+
+Here we combine the old GERAS indices with the new ones as follows:
+
+```{r, results='markup'}
+# old indices
+geras_1994_2009 <- read.csv("data_init/GERAS_old_1994_2009.csv", header = TRUE, sep = ";") # in million
+rownames(geras_1994_2009) <- geras_1994_2009$Year
+geras_1994_2009 <- geras_1994_2009[,-1]
+colnames(geras_1994_2009) <- 0:8
+
+# new indices
+# geras_excl <- read.csv2("data_init/ab_GERASage_norec2124.csv", header = TRUE) # in millions
+# geras_excl <- t(apply(geras_excl,1,as.numeric))
+# geras_excl[which(geras_excl[,1]==8),] <- apply(geras_excl[which(geras_excl[,1]>=8),], 2, sum) # create 8+ group
+# geras_excl <- t(geras_excl[1:9,-1])
+geras_excl <- read.csv("data_init/GERAS_ab_index.csv", header = TRUE) # in millions
+geras_excl <- geras_excl[,-1]
+rownames(geras_excl) <- 2010:2024
+colnames(geras_excl) <- 0:8
+geras <- rbind(geras_1994_2009,geras_excl)
+head(geras)
+
+gerasNew <- geras[,as.character(1:3)]*1000 # in thousands
+```
+
+
+```{r geras, echo=FALSE, results='markup'}
+knitr::kable(gerasNew, caption = "GERAS indices (thousand) used in the WBSS herring model", digits = 0)
+```
+
+
+```{r}
+# prepare to copy to .dat
+attr(gerasNew, "name") <- "GERAS"
+attr(gerasNew, "years") <- c(min(rownames(gerasNew)), max(rownames(gerasNew)))
+attr(gerasNew, "unit") <- "thousand"
+attr(gerasNew, "plusgroup") <- "no"
+save(gerasNew, file="data_final/GERAS.RData")
+gerasNew <- cbind(rep(1, nrow(gerasNew)), gerasNew) # in thousand
+write.table(gerasNew, file="data_final/GERAS.dat", row.names = FALSE)
+```
+
+The GERAS indices used in the WBSS herring model are reported in Table \ref{tab:geras}.
+
+## N20
+
+Note that while it was accepted to use the new N20 indices including larval mortality for the model, the survey team proposed after the DEWK to use new indices that are estimated on the basis of abundance per volume instead of area (Figure \ref{fig:N20comp}). 
+
+The new indices are prepared as follows:
+
+```{r, results='markup'}
+N20init <- read.csv2("data_init/N20_old_and_new_20251111.csv", header = TRUE) # in millions
+head(N20init)
+
+N20New <- N20init[,"N20volume_m"] # abundance per volume + mortality
+names(N20New) <- N20init$Year
+N20New <- cbind("0"=N20New*1000) # in thousand
+```
+
+```{r n20, echo=FALSE, results='markup'}
+knitr::kable(N20New, caption = "N20 indices (thousand) used in the WBSS herring model")
+```
+
+
+```{r}
+# prepare to copy to .dat
+attr(N20New, "name") <- "N20"
+attr(N20New, "years") <- c(min(rownames(N20New)), max(rownames(N20New)))
+attr(N20New, "unit") <- "thousand"
+attr(N20New, "plusgroup") <- "no"
+save(N20New, file="data_final/N20.RData")
+N20New <- cbind(rep(1, nrow(N20New)), N20New) # in thousand
+write.table(N20New, file="data_final/N20.dat", row.names = FALSE)
+```
+
+```{r N20comp, fig.cap="Different N20 indices. The black lines show the N20 estimated on the basis of abundance per area. The red lines show the indices estimated on the basis of abundance per volume. The dashed lines show the indices that consider larval mortality. The final indices are shown with the red dashed line.", fig.dim=c(6,6)}
+plot(N20init[,"N20area"]~N20init[,"year"], type="l", xlab="", ylab="N20 (million)")
+lines(N20init[,"N20area_m"]~N20init[,"year"], lty=2)
+lines(N20init[,"N20volume"]~N20init[,"year"], col="firebrick", lty=1)
+lines(N20init[,"N20volume_m"]~N20init[,"year"], col="firebrick", lty=2)
+```
+
+The N20 indices used in the WBSS herring model are reported in Table \ref{tab:n20}. Note that the first index in 1992 is really low compared to the others. After checking with the survey team, the low value could be due to the fact that sampling was not carried out for a sufficiently long period in 1992. It might therefore be relevant to ignore it. This will be discussed during tuning.
+
+
+## IBTS/BITS Q1
+
+```{r, results='markup'}
+load("data_init/WBSSQ1.RData")
+ibts_bitsQ1 <- WBSSQ1[[14]]
+head(ibts_bitsQ1)
+
+ibts_bitsQ1New <- ibts_bitsQ1[,as.character(3:5)]
+```
+
+```{r ibtsbits, echo=FALSE, results='markup'}
+knitr::kable(ibts_bitsQ1New, caption = "IBTS/BITS Q1 indices (relative abundance) used in the WBSS herring model. Last age is a plus group.")
+```
+
+```{r}
+# prepare to copy to .dat
+attr(ibts_bitsQ1New, "name") <- "IBTS/BITS-Q1"
+attr(ibts_bitsQ1New, "years") <- c(min(rownames(ibts_bitsQ1New)), max(rownames(ibts_bitsQ1New)))
+attr(ibts_bitsQ1New, "unit") <- "relative abundance"
+attr(ibts_bitsQ1New, "plusgroup") <- "yes"
+save(ibts_bitsQ1New, file="data_final/IBTSBITSQ1.RData")
+ibts_bitsQ1New <- cbind(rep(1, nrow(ibts_bitsQ1New)), ibts_bitsQ1New) # in thousand
+write.table(ibts_bitsQ1New, file="data_final/IBTSBITSQ1.dat", row.names = FALSE)
+```
+
+The IBTS/BITS Q1 indices used in the WBSS herring model are reported in Table \ref{tab:ibtsbits}.
+
+Coefficient of variation (CV) estimates are available for the modelled indices and their consideration will be tested during model tuning. These are handled as follows:
+
+```{r}
+tmp <- read.table("data_init/WBSSher-trawlQ1CV.txt")
+tmp <- tmp[,3:5]
+
+ibtsbitsCV <- tmp  / mean(as.matrix(tmp),na.rm=TRUE)
+colnames(ibtsbitsCV) <- 3:5
+
+save(ibtsbitsCV, file="data_final/ibtsbitsCV.RData")
+write.table(ibtsbitsCV, file="data_final/ibtsbitsCV.dat") # for stockassessment.org
+```
+
+
+# Biological inputs
+
+## Maturity ogive
+
+The investigation made on the maturity ogive using Swedish IBTS data did not lead to update at the DEWK. As a result, the maturity ogive is unchanged compared to the 2025 assessment model (Table \ref{tab:mat}).
+
+```{r mat, echo=FALSE, results='markup'}
+knitr::kable(fitsf$data$propMat, caption = "Maturity ogive used in the WBSS herring model.")
+```
+
+
+## Proportion of F before spawning 
+
+It was decided during the DEWK to use the proportion of fishing before spawning as the proportion of fishing in quarter 1 from the catch at age in numbers (CANUM) estimated as the median across years and ages for ages 1+, and kept constant across years in the model. This leads to a value of **0.168**.
+
+
+## Natural mortality
+
+It was decided during the DEWK to use the natural mortality from the North Sea herring assessment (before profiling) averaged across years and kept time-invariant as baseline in the model and do profiling of M in the sensitivity runs. 
+```{r}
+NSAS_M <- read.csv("data_init/NSAS_M.csv")
+NSAS_M <- xtabs(data~year+age, data=NSAS_M)
+meanM <- apply(NSAS_M[as.character(1991:2024),], 2, mean)
+M <- matrix(meanM, nrow = length(1991:2024), ncol=ncol(NSAS_M), byrow = TRUE, dimnames = list(1991:2024, colnames(NSAS_M)))
+M <- round(M,3)
+save(M, file="data_final/M.RData")
+write.table(M, file="data_final/M.dat", row.names = FALSE)
+```
+
+The M values in the North Sea herring model are available in the period `r min(rownames(NSAS_M))`-`r max(rownames(NSAS_M))`. However, the SMS keyrun is done from 1974 and the WBSS herring model is for 1991-2024. As a result, here we chose to make an average of Ms in 1991-2024, and we rounded the M values to 3 decimal digits (Table \ref{tab:M}).
+
+```{r M, echo=FALSE, results='markup'}
+knitr::kable(M, caption = "Natural mortality used in the WBSS herring model.")
+```
+
+\clearpage
+
+# Catch
+
+New multifleet and single fleet data was provided by Kirsten (stock coordinator) for the period 2000-2024 following the new fleet definition in Division 3.a and some re-submission from Sweden in all areas. In addition, the catches of the A-fleet were updated in 2024 to follow common method, as they were calculated differently at HAWG in 2025.
+
+## Single fleet model
+
+Here we collect the catch numbers at age (CANUM) and catch weights (also landing and discard weights) prior and after 2000 as follows:
+
+```{r}
+# CANUM
+originalCANUM <- getFleet(fitsf,1)
+newdata <- read.csv("data_init/catch/30_updated_wbss_single_fleet_t_2000-2024.csv", header=TRUE)
+newCANUM <- subset(newdata, value=="wbss_canum_1000")
+rownames(newCANUM) <- newCANUM[,"year"]
+newCANUM <- newCANUM[,-1]
+newCANUM <- newCANUM[,-ncol(newCANUM)]
+colnames(newCANUM) <- colnames(originalCANUM)
+
+CANUMfull <- round(rbind(originalCANUM[as.character(1991:1999),], newCANUM)) 
+
+# catch weights
+originalCw <- fitsf$data$catchMeanWeight[,,1]
+newCw <- subset(newdata, value=="weca_kg")
+rownames(newCw) <- newCw[,"year"]
+newCw <- newCw[,-1]
+newCw <- newCw[,-ncol(newCw)]
+colnames(newCw) <- colnames(originalCw)
+
+Cwfull <- rbind(originalCw[as.character(1991:1999),], newCw) 
+
+save(CANUMfull, file="data_final/CANUM_sf.RData")
+write.table(CANUMfull, file="data_final/CANUMfull_sf.dat", row.names = FALSE)
+
+save(Cwfull, file="data_final/Cw_sf.RData")
+write.table(Cwfull, file="data_final/Cw_sf.dat", row.names = FALSE)
+```
+
+```{r canumsf, echo=FALSE, fig.cap="New (lines) vs. original (numbers) CANUMS for the single commercial fleet. Here 1-9 refers to ages 0-8+."}
+matplot(y=log(originalCANUM), x=rownames(originalCANUM), ylab="Log Catch at age", xlab="")
+matplot(y=log(newCANUM), x=rownames(newCANUM), type="l", add=TRUE)
+```
+
+```{r cwsf, echo=FALSE, fig.cap="New (lines) vs. original (numbers) catch weights for the single commercial fleet. Here 1-9 refers to ages 0-8+."}
+matplot(y=originalCw, x=rownames(originalCw), ylab="Catch weights at age", xlab="")
+matplot(y=newCw, x=rownames(newCw), type="l", add=TRUE)
+```
+
+```{r tableCANUMsf, echo=FALSE, results='markup'}
+knitr::kable(CANUMfull, caption = "Catch at age in numbers (single fleet model).")
+```
+
+```{r tableCwsf, echo=FALSE, results='markup'}
+knitr::kable(Cwfull, caption = "Weight at age in the catch in kg (single fleet model).")
+```
+
+The difference in CANUM and weights between the original data and the new is limited (Figures \ref{fig:canumsf} and \ref{fig:cwsf}). The final values are given in Tables \ref{tab:tableCANUMsf} and \ref{tab:tableCwsf}.
+
+Stock weights are assumed as usual to be take from catch weights in quarter 1 (close to spawning time):
+
+```{r}
+originalSw <- fitsf$data$stockMeanWeight
+newdataQ <- read.csv("data_init/catch/30_updated_wbss_input_quarter_t_2000-2024.csv", header=TRUE)
+newSw <- subset(newdataQ, value=="weca_kg" & quarter==1)
+rownames(newSw) <- newSw[,"year"]
+newSw <- newSw[,-c(1:2)]
+newSw <- newSw[,-ncol(newSw)]
+newSw[,1] <- 0.0001 # As usual (not used anyway because maturity ogive is 0 for age 0)
+colnames(newSw) <- colnames(originalSw)
+
+Swfull <- rbind(originalSw[as.character(1991:1999),], newSw) 
+
+save(Swfull, file="data_final/Sw_sf.RData")
+write.table(Swfull, file="data_final/Sw_sf.dat", row.names = FALSE)
+```
+
+```{r Swsf, echo=FALSE, fig.cap="New (lines) vs. original (numbers) stock weights for the single commercial fleet. Here 1-9 refers to ages 0-8+."}
+matplot(y=originalSw, x=rownames(originalSw), ylab="Stock weights at age", xlab="")
+matplot(y=newSw, x=rownames(newSw), type="l", add=TRUE)
+```
+
+The difference in stock weights using the new data is minimal.
+
+```{r tableSw, echo=FALSE, results='markup'}
+knitr::kable(Swfull, caption = "Weight at age in the stock (kg).")
+```
+
+The final stock weights are given in Table \ref{tab:tableSw}.
+
+## Multifleet model
+
+Here we collect the catch numbers at age (CANUM) and catch weights (also landing and discard weights) per fleet prior and after 2000 as follows:
+
+
+```{r}
+fl_names <- c("A", "C", "D", "F")
+newdata <- read.csv("data_init/catch/30_updated_wbss_multi_fleet_t_2000-2024.csv", header=TRUE)
+
+newCANUM <- list()
+newCw <- list()
+
+for (fl in 1:length(fl_names)){
+# CANUM
+originalCANUM <- getFleet(fitmf,fl)
+if(fl==1) originalCANUM <- cbind("0"=0, originalCANUM)
+newCANUM[[fl]] <- subset(newdata, value=="wbss_canum_1000" & fleet==fl_names[fl])
+rownames(newCANUM[[fl]]) <- newCANUM[[fl]][,"year"]
+newCANUM[[fl]] <- newCANUM[[fl]][,-c(1:2)]
+newCANUM[[fl]] <- newCANUM[[fl]][,-ncol(newCANUM[[fl]])]
+colnames(newCANUM[[fl]]) <- colnames(originalCANUM)
+
+# catch weights
+originalCw <- fitmf$data$catchMeanWeight[,,fl]
+newCw[[fl]] <- subset(newdata, value=="weca_kg" & fleet==fl_names[fl])
+rownames(newCw[[fl]]) <- newCw[[fl]][,"year"]
+newCw[[fl]] <- newCw[[fl]][,-c(1:2)]
+newCw[[fl]] <- newCw[[fl]][,-ncol(newCw[[fl]])]
+colnames(newCw[[fl]]) <- colnames(originalCw)
+
+# Fill up missing catch weights with single fleet Cw
+newCw[[fl]][is.na(newCw[[fl]])] <- Cwfull[as.character(rownames(newCw[[fl]])),][is.na(newCw[[fl]])]
+
+tmp1 <- round(newCANUM[[fl]])
+tmp2 <- newCw[[fl]]
+
+save(tmp1, file=paste0("data_final/CANUM_mf_", fl, ".RData"))
+write.table(tmp1, file=paste0("data_final/CANUM_mf_", fl, ".dat"), row.names = FALSE)
+
+save(tmp2, file=paste0("data_final/Cw_mf_", fl,".RData"))
+write.table(tmp2, file=paste0("data_final/Cw_mf_", fl,".dat"), row.names = FALSE)
+
+}
+```
+
+
+```{r canumsmf, fig.cap="New (lines) vs. original (numbers) CANUMS and catch weights for the multifleet model. Here 1-9 refers to ages 0-8+.", fig.dim=c(10,10)}
+par(mfrow=c(length(fl_names),2), mar=c(1,4,1,2))
+
+for (fl in 1:length(fl_names)){
+  
+originalCANUM <- getFleet(fitmf,fl)
+if(fl==1) originalCANUM <- cbind("0"=0, originalCANUM)
+originalCw <- fitmf$data$catchMeanWeight[,,fl][as.character(rownames(newCw[[fl]])),]
+
+matplot(y=log(originalCANUM), x=rownames(originalCANUM), ylab="Log Catch at age", xlab="")
+matplot(y=log(newCANUM[[fl]]), x=rownames(newCANUM[[fl]]), type="l", add=TRUE)
+matplot(y=originalCw, x=rownames(originalCw), ylab="Catch weights at age", xlab="")
+matplot(y=newCw[[fl]], x=rownames(newCw[[fl]]), type="l", add=TRUE)
+mtext(side=4, line=1, text =paste0("Fleet ", fl_names[fl]))
+
+}
+```
+
+
+```{r tableCANUMmfA, echo=FALSE, results='markup'}
+knitr::kable(newCANUM[[1]], caption = "Catch at age in numbers for the A-fleet.", digit=0)
+```
+
+```{r tableCwmfA, echo=FALSE, results='markup'}
+knitr::kable(newCw[[1]], caption = "Weight at age (kg) in the catch for the A-fleet.")
+```
+
+```{r tableCANUMmfC, echo=FALSE, results='markup'}
+knitr::kable(newCANUM[[2]], caption = "Catch at age in numbers for the C-fleet.", digit=0)
+```
+
+```{r tableCwmfC, echo=FALSE, results='markup'}
+knitr::kable(newCw[[2]], caption = "Weight at age (kg) in the catch for the C-fleet.")
+```
+
+```{r tableCANUMmfD, echo=FALSE, results='markup'}
+knitr::kable(newCANUM[[3]], caption = "Catch at age in numbers for the D-fleet.", digit=0)
+```
+
+```{r tableCwmfD, echo=FALSE, results='markup'}
+knitr::kable(newCw[[3]], caption = "Weight at age (kg) in the catch for the D-fleet.")
+```
+
+```{r tableCANUMmfF, echo=FALSE, results='markup'}
+knitr::kable(newCANUM[[4]], caption = "Catch at age in numbers for the F-fleet.", digit=0)
+```
+
+```{r tableCwmfF, echo=FALSE, results='markup'}
+knitr::kable(newCw[[4]], caption = "Weight at age (kg) in the catch for the F-fleet.")
+```
+
+Figures \ref{tab:tableCANUMmfA}-\ref{tab:tableCANUMmfF} illustrate the difference between the original and the new catch and weight at age data per fleet. The differences are limited, but as expected, the largest differrence are for the C- and D-fleets that have been redefined.
+
+Tables \ref{tab:tableCwmfA}-\ref{tab:tableCwmfF} collect the new data per fleet.
+
+
+The data produced in this WD is then copied to stockassessment.org.
+
+
+# Reference
