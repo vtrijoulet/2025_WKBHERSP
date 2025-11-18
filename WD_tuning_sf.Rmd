@@ -120,8 +120,6 @@ legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rhodef
 
 ```
 
-Note that despite the residuals needing improving, the retrospective patterns are already much better than with the current assessment model.
-
 
 \clearpage
 
@@ -139,7 +137,7 @@ From Figure \ref{fig:resdeffit}, we see medium high significant (darker blue) bi
 conf1 <- defconf
 conf1$keyLogFpar
 conf1$keyLogFpar[5,6] <- 9
-conf1$keyLogFpar 
+conf1$keyLogFpar
 ```
 
 ```{r fit1}
