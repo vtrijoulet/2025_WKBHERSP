@@ -128,9 +128,9 @@ legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rhodef
 For the tuning of the model, we primarily consider model performance (e.g., convergence, hessian is positive definite, the standard error around parameters can be estimated), one-step ahead (OSA) residuals [@trijoulet2023osa], and retrospective patterns.
 
 
-## Bias in catch and survey fleets due to parameter coupling (keyLogSta and keylogFpar parameters, respectively)
+## Bias in catch and survey fleets due to parameter coupling (keyLogFsta and keylogFpar parameters, respectively)
 
-From Figure \ref{fig:resdeffit}, we see medium high significant (darker blue) bias in the IBTS/BITSQ1 fleet (fleet 5) for ages 4 and 5. The bias is also visible in the bubble plot, where we see age effects (only red or blue residuals for most of the time series) for both ages. As a result, we choose to uncoupled these ages as follows:
+From Figure \ref{fig:resdeffit}, we see medium high significant (darker blue) bias in the IBTS/BITSQ1 fleet (fleet 5) for ages 4 and 5. The bias is also visible in the bubble plot, where we see age effects (only red or blue residuals for most of the time series) for both ages. As a result, we choose to uncouple these ages as follows:
 
 ```{r, results='markup'}
 ## Modify the configuration
