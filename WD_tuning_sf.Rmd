@@ -841,6 +841,7 @@ tmp <- ls()[grep("fit", ls())]
 fits_names <- stringi::stri_sort(tmp, numeric=TRUE)
 fits_names[1] <- tmp[2]
 fits_names[2] <- tmp[1]
+fits_names <- c(fits_names[1:4], "bestFit", fits_names[-c(1:4)])
 rhos <- paste0("rho", gsub("fit", "", fits_names))
 toextract <- c("Number of parameters", "Convergence", "AIC", "Mohn's rho SSB", "Mohn's rho Fbar", "Comments")
 table_out <- matrix(NA, nrow=length(fits_names), ncol=length(toextract), dimnames = list(fits_names, toextract))
@@ -858,7 +859,7 @@ for(i in seq(fits_names)){
 ```{r summary, echo=FALSE, results='markup'}
 library(kableExtra)
 kable(table_out, "latex", booktabs = T, caption = "Summary of the fits obtained during tuning.") %>%
-kable_styling(latex_options = c("striped", "scale_down"))
+kable_styling(latex_options = c("striped", "scale_down")) 
 ```
 
 We have now a model "fit12" that seems satisfactory. Table \ref{tab:summary} summarizes the main outputs of the different fits obtained during the tuning until now.
