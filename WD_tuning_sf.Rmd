@@ -91,7 +91,7 @@ dat <- deffit$data
 ```
 
 ```{r deffit, results='markup'}
-deffit
+deffit$sdrep
 AIC(deffit)
 ```
 
