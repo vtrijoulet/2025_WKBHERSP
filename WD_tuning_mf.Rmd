@@ -1,0 +1,968 @@
+---
+title: "Working document: Tuning of the multifleet model for WBSS herring"
+author: Vanessa Trijoulet
+output:
+  bookdown::pdf_document2: default
+bibliography: refs.bib
+date: "`r format(Sys.Date(), '%d %B %Y')`"
+header-includes:
+  - \usepackage{pdflscape}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE,
+	cache = TRUE,
+	results = "hide",
+	tidy = TRUE,
+	tidy.opts = list(width.cutoff = I(90))
+)
+seed <- 1234 
+qplot <-function(fit, ...){
+  Q <- fit$conf$keyLogFpar
+  Q[] <- exp(fit$pl$logFpar)[ifelse(Q<0,NA,Q+1)]
+  ages <- fit$conf$minAge:fit$conf$maxAge
+  Q <- Q/rowMeans(Q, na.rm=T)
+  idx <- apply(Q,1,function(x)!all(is.na(x)))
+  Q <- Q[idx,]
+  matplot(ages, t(Q), type="b", lwd=4, ylab="Standardized catchability", pch=1, col=1:10, lty=1:10, ...)
+  fn<-attr(fit$data, "fleetNames")[idx]
+  legend("topright", legend=fn, lty=1:10, lwd=4, col=1:10, bty="n")
+}
+
+# Modified residplot with between plotting when multiple fleets:
+residplot<-function(fit,resid=NULL,bubbles=TRUE,palette=hcl.colors(4,palette="Blues"),p.breaks=c(0,0.001,0.05,0.1,1),reverseFleetOrder=FALSE, plot=TRUE){
+  
+  if(class(fit)!="sam") stop("fit argument must be an object of class 'sam'")
+  if(!is.null(resid) && class(resid)!="samres") stop("resid argument must be an object of class 'samres'")
+  
+  stopifnot( (length(palette)+1)==length(p.breaks))
+  if(is.null(resid)){
+    if(reverseFleetOrder){
+      resid <- residuals(fit,subset=order(fit$data$aux[,"year"],max(fit$data$aux[,"fleet"])-fit$data$aux[,"fleet"],fit$data$aux[,"age"]))
+    } else {
+      resid <- residuals(fit)
+    }
+  }
+  resid.df <- data.frame(residual=resid$residual,fleet=resid$fleet,age=resid$age,year=resid$year)
+  resid.df$residual[ is.nan(resid.df$residual) ] <- NA
+  
+  ## Biomass indices have age = -1, change to min age for convenience
+  if(any(resid.df$age<0)){
+    resid.df$age[ resid.df$age<0 ] <- fit$conf$minAge 
+  }    
+  restab <- xtabs(residual ~ year + age + fleet,data=resid.df)
+  restab[ restab==0 ] <- NA
+  
+  fnames <- sapply(attr(fit$data,"fleetNames"),substr,start=0,stop=14)
+  
+  acf.time.p <- bias <- variance <- bias.p <- variance.p <- matrix(NA,nrow=dim(restab)[3],ncol=fit$conf$maxAge - fit$conf$minAge + 1,dimnames=list(Fleet=fnames,Age=fit$conf$minAge:fit$conf$maxAge))
+  
+  shapiro <- acf.age.p <- meanvar <- meanvar.p <- numeric(dim(restab)[3])
+  
+  chisqtest<-function(x,testvar=1){
+    n <- length(x)
+    s2 <- var(x)
+    chsq <- (n-1)*s2/testvar
+    pval <- 1 - pchisq(chsq,n-1)
+    pval
+  }
+  
+  noagesf <- fit$data$maxAgePerFleet - fit$data$minAgePerFleet
+  
+  bp<-function(x,y,v, scale=3, ...){
+    xlim <- c(min(x) - 1, max(x) + 1)
+    ylim <- c(min(y) - 1, max(y) + 1)
+    plot(x,y,cex=sqrt(abs(v))*scale, col=ifelse(v<0,rgb(1, 0, 0, alpha = 0.5),rgb(0, 0, 1, alpha = 0.5)), pch=19, xlim=xlim, ylim=ylim,...)
+    points(x[v>0],y[v>0],cex=sqrt(v[v>0])*scale, col=rgb(0, 0, 1, alpha = 0.5), pch=19, ...)
+  }
+  
+  if(plot){
+    if (bubbles) {
+      op <- par(mfrow=n2mfrow(dim(restab)[3]+6),las=1,mar=c(5,8,5,5))
+    } else {
+      op <- par(mfrow=n2mfrow(6),las=1,mar=c(5,8,5,5))
+    }
+    on.exit(par(op))
+  }
+  
+  for(fl in 1:dim(restab)[3]){
+    ## fleet based 3s
+    
+    flsel <- resid$fleet==fl
+    if(plot && bubbles){
+      bp(resid$year[flsel],resid$age[flsel],resid$residual[flsel],main=paste(attr(fit$data,"fleetNames")[fl],"(",fl,")"),xlab="Year",ylab="Age")
+    }
+    shapiro[fl] <- shapiro.test(na.omit(as.vector(restab[,,fl])))$p.value        
+    
+    acfvec <- as.vector(apply(restab[,,fl],1,function(x) as.numeric(c(as.vector(x),rep(NA,noagesf[fl]+1)) )))
+    
+    if(is.list(acfvec)) acfvec <- do.call("c",acfvec)
+    acf.age.p[fl] <- Box.test( acfvec,type="Ljung-Box",lag=1)$p.value
+    
+    sel <- resid.df$fleet==fl
+    sel2 <- fit$rep$predObs[sel] < median(fit$rep$predObs[sel])
+    lofit <- resid.df$residual[sel][ sel2 ]
+    hifit <- resid.df$residual[sel][ !sel2 ]
+    
+    meanvar[fl] <- var(hifit,na.rm=TRUE) / var(lofit,na.rm=TRUE)
+    meanvar.p[fl] <- pf( meanvar[fl], length(hifit)-1, length(lofit)-1)
+    
+    for(a in fit$data$minAgePerFleet[fl]:fit$data$maxAgePerFleet[fl]){
+      ## fleet and age based tests
+      colu <- ifelse(fit$data$fleetTypes[fl]==3,1,a-fit$conf$minAge+1) ## take care of biomass indices (no ages)
+      bias[fl,colu] <- mean(restab[,colu,fl],na.rm=TRUE)
+      variance[fl,colu] <- var(na.omit(restab[,colu,fl]))
+      bias.p[fl,colu] <- t.test(restab[,colu,fl])$p.value
+      variance.p[fl,colu] <- chisqtest(na.omit(restab[,colu,fl]))
+      acf.time.p[fl,colu] <- Box.test( restab[,colu,fl],type="Ljung-Box")$p.value
+      ## Note, that this is also testing for negative autocorrelation.
+      ## Consider only testing for positive? (or use e.g. red colors instead of blue for significant negative correlations?) 
+    }        
+  }
+  
+  if(plot){
+    plot(apply(t(bias.p),2,rev),breaks=p.breaks,col=palette,fmt.cell = "%.4f",xlab="Fleet",ylab="Age",main="Bias")
+    plot(apply(t(variance.p),2,rev),breaks=p.breaks,col=palette,fmt.cell = "%.4f",xlab="Fleet",ylab="Age",main="Variance",key=NULL)
+    plot(t(matrix(acf.age.p,nrow=1)),breaks=p.breaks,col=palette,fmt.cell = "%.4f",xlab="",ylab="Fleet",main="Correlation age direction",key=NULL)
+    plot(t(matrix(meanvar.p,nrow=1)),breaks=p.breaks,col=palette,fmt.cell = "%.4f",xlab="",ylab="Fleet",main="Mean-variance relationship",key=NULL)
+    plot(apply(t(acf.time.p),2,rev),breaks=p.breaks,col=palette,fmt.cell = "%.4f",xlab="Fleet",ylab="Age",main="Correlation time direction",key=NULL)
+    plot(t(matrix(shapiro,nrow=1)),breaks=p.breaks,col=palette,fmt.cell = "%.4f",xlab="",ylab="Fleet",main="Normality (shapiro)",key=NULL)
+  }
+  
+  list(bias=bias.p,variance=variance.p,correlation.age=acf.age.p,meanvar=meanvar.p,correlation.time=acf.time.p,normality=shapiro)
+}
+
+toInterval <- function(x, a, b, d) {return ((b - a)/(1 + exp(-d * x)) + a)}
+
+# Fix to work in multifleet:
+qtable_multi <- function (fit, ...){
+  key <- fit$conf$keyLogFpar[-fit$data$fleetTypes != 0 & fit$data$fleetTypes!=7, ] + 1
+  key[key == 0] <- NA
+  cf <- coef(fit)
+  cfsd <- attr(cf, "sd")
+  qt <- matrix(cf[names(cf) == "logFpar"][key], nrow = nrow(key), ncol = ncol(key))
+  rownames(qt) <- attr(fit$data, "fleetNames")[-fit$data$fleetTypes != 0  & fit$data$fleetTypes!=7]
+  colnames(qt) <- fit$conf$minAge:fit$conf$maxAge
+  sds <- qt
+  sds[] <- cfsd[names(cf) == "logFpar"][key]
+  attr(qt, "sd") <- sds
+  class(qt) <- "samqtable"
+  qt
+}
+
+library(parallel)
+```
+
+
+# Model with default configuration
+
+Here we used the multifleet SAM model from @nielsen2021multi. Please note that we are now working from the main branch of SAM, while the current assessment was still using the "multi" branch, which was behind with the most recent SAM improvements.
+
+In addition, the model uses the same data as decided for the single fleet model, i.e., final M from fine-tuned profiling, and CVs around the IBTS/BITS Q1 survey.
+
+The data created in "WD_data_prep.pdf" was copied to stockassessment.org under the name "WBSS_HAWG_2025_benchmark_init" and a default configuration file was created and the model run to be then used in this working document (WD), as follows:
+
+```{r fit}
+library(stockassessment)
+fit <- fitfromweb("WBSS_HAWG_2025_benchmark_init") # fit with new data and default configuration
+# Note to use for summary:
+attr(fit, "comment") <- "Fit from stockassessment.org, default configuration with Fbar range 3-6"
+```
+
+The data used in the model is summarized in Figure  \ref{fig:data}.
+
+```{r data, echo=FALSE, fig.cap="Data used in the model.", fig.dim=c(8,8)}
+dataplot(fit)
+```
+
+The stock online uses the old Fbar range (3-6) for comparison purpose. As agreed for the single fleet model, we use the new Fbar range, i.e., 2-5 as follows:
+
+```{r}
+dat <- fit$data
+defconf <- fit$conf
+defconf$fbarRange <- c(2,5)
+par <- defpar(dat, defconf)
+deffit <- sam.fit(dat, defconf, par)
+attr(deffit, "comment") <- "Default configuration with new Fbar range 2-5"
+```
+
+```{r deffit, results='markup'}
+deffit$sdrep
+AIC(deffit)
+```
+
+<!-- Note that the model has converged but two parameters go to the bounds. As a result the hessian is not positive definite and the standard error around the parameters cannot be estimated. The parameters are the process error on the survival (2nd logSdLogN), and the correlation in F for the third fleet, i.e., D-fleet. The first was already starting to be problematic in the current assessment, and the 3s done for the single fleet shows that it is still sensitive.  -->
+
+Note that the model has converged but two parameters present large standard errors: the process error on the survival (2nd logSdLogN), and the correlation in F for the third fleet, i.e., D-fleet. The first was already starting to be problematic in the current assessment, and the tests done for the single fleet shows that it is still sensitive.
+
+At the DEWK, it was agreed that historical data would be considered to improve the stability of the multifleet model. The model converges despite some problematic parameters so we try to see how robust the model is during tuning before we add historical data that would have to be ignored in the diagnostics.
+
+```{r resdeffit, fig.cap="Residual plots for the fit 'deffit' with default configuration.", fig.dim=c(8,8)}
+set.seed(seed, sample.kind = "Rounding") # only relevant to random effect residuals, problem with RmD
+res <- residuals(deffit)
+plot(res)
+```
+
+```{r resdeffitb, fig.cap="Residual diagnostic plots for the fit 'deffit' with default configuration.", fig.dim=c(15,15)}
+par(cex.axis=0.8)
+residplot(deffit, resid=res, bubbles = FALSE)
+```
+
+
+```{r retrodeffit, fig.cap="Retrospective patterns for the fit 'deffit' with default configuration.", fig.dim=c(6,10)}
+MAT <- cbind(matrix(rep(max(fit$data$year):(max(fit$data$year)-4), fit$data$noFleets-1), ncol=fit$data$noFleets-1), 3000)
+retrodef <- retro(deffit, year = MAT)
+rhodef <- mohn(retrodef)
+
+par(mfrow=c(3,1))
+ssbplot(retrodef, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rhodef[2]))), bty="n")
+fbarplot(retrodef, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rhodef[3]))), bty="n")
+recplot(retrodef, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rhodef[1]))), bty="n")
+
+```
+
+Note that despite the residuals needing improving (Figures \ref{fig:resdeffit} and \ref{fig:resdeffitb}), the retrospective patterns are already much better than with the current assessment model (Figure \ref{fig:retrodeffit}). Here a matrix is needed as argument to the retro function because one fleet (`r `attr(deffit$data,"fleetNames")[length(attr(deffit$data,"fleetNames"))]`) only goes up to 1999, so this fleet is set to not be reduced in the matrix "MAT".
+
+
+# Tuning
+
+Similarly as for the single fleet model, for the tuning of the multifleet model, we primarily consider model performance (e.g., convergence, hessian is positive definite, the standard error around parameters can be estimated), one-step ahead (OSA) residuals [@trijoulet2023osa], and retrospective patterns.
+
+## Use the configuration from the single fleet model for the surveys
+
+From Figure \ref{fig:resdeffit}, we see that the surveys present similar residuals as initially observed for the single fleet model. To simplify the tuning, we use the same configuration as the final single fleet model (fitFinal) for the survey fleets as follows:
+
+```{r, results='markup'}
+## Modify the configuration
+conf1 <- defconf
+idx <- which(dat$fleetTypes==2)
+load("results/fitFinal.RData")
+idxsf <- which(fitFinal$data$fleetTypes==2)
+tochange <- c("keyLogFpar", "keyVarObs", "obsCorStruct","keyCorObs")
+for (i in seq(tochange)){
+  if (is.vector(conf1[[tochange[i]]]) | is.factor(conf1[[tochange[i]]])){
+    conf1[[tochange[i]]][idx] <- fitFinal$conf[[tochange[i]]][idxsf]
+  } else {
+    max <- max(conf1[[tochange[i]]][-idx,], na.rm=TRUE)
+    if(max==-1) max <- 0
+    idx2 <-  fitFinal$conf[[tochange[i]]][idxsf,]>-1
+    conf1[[tochange[i]]][idx,][idx2] <- fitFinal$conf[[tochange[i]]][idxsf,][idx2]+max
+  }
+}
+conf1[names(conf1) %in% tochange]
+```
+
+```{r fit1}
+## Fit with new configuration
+par1<-defpar(dat,conf1)
+fit1<-sam.fit(dat,conf1,par1)
+attr(fit1, "comment") <- "Apply configuration from single fleet fitFinal to surveys"
+```
+
+```{r, results='markup'}
+## Check new fit convergence and AIC
+fit1$sdrep
+AIC(deffit)
+AIC(fit1)
+```
+
+```{r resfit1, fig.cap="Residual plots for the fit 'fit1'.", fig.dim=c(8,8)}
+## New residuals and plot
+set.seed(seed, sample.kind = "Rounding")
+res1 <- residuals(fit1)
+plot(res1)
+```
+
+```{r resfit1b, fig.cap="Residual diagnostic plots for the fit 'fit1'.", fig.dim=c(15,15)}
+par(cex.axis=0.8)
+residplot(fit1, resid=res1, bubbles = FALSE)
+```
+
+```{r retrofit1, echo=FALSE, fig.cap="Retrospective patterns for the fit 'fit1'.", fig.dim=c(6,10)}
+retro1 <- retro(fit1, year = MAT)
+rho1 <- mohn(retro1)
+
+par(mfrow=c(3,1))
+ssbplot(retro1, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho1[2]))), bty="n")
+fbarplot(retro1, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho1[3]))), bty="n")
+recplot(retro1, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho1[1]))), bty="n")
+
+```
+
+AIC is better for "fit1". We can see that the year effects for all surveys with multiple ages, and the age effects in IBTS/BITS Q1 (age 4-5) have now disappeared, the survey residuals look much better (Figures \ref{fig:resfit1} and \ref{fig:resfit1b}). The Mohn's rho have doubled for Fbar but are still low (Figure \ref{fig:retrofit1}).
+
+
+We now continue the tuning as normal, starting with the bias in catch fleet parameters.
+
+
+## Bias in catch fleets due to parameter coupling (keyLogFsta parameters)
+
+From Figures \ref{fig:resfit1} and \ref{fig:resfit1b}, we see significant (darker blue) bias for the age 8+ of the F-fleet. Our experience with fitting the single fleet model is that it usually does not help to uncouple the last two ages for a commercial fleet. We try it anyway to be sure: 
+
+```{r, results='markup'}
+## Modify the configuration
+conf2 <- conf1
+conf2$keyLogFsta
+conf2$keyLogFsta[which(attr(dat, "fleetNames")=="F-fleet"),9] <- 31
+conf2$keyLogFsta
+```
+
+```{r fit2, error=TRUE}
+## Fit with new configuration
+par2<-defpar(dat,conf2)
+fit2<-sam.fit(dat,conf2,par2)
+```
+
+The model does not converged, so we continue with "fit1".
+
+```{r, echo=FALSE}
+# For summary reporting purposes:
+fit2 <- fit1
+attr(fit2, "comment") <- "Uncouple ages 7 and 8+ for F-fleet"
+fit2$opt$convergence <- 1
+fit2$opt$objective<- NA
+```
+
+There is no other obvious bias in parameters (Figures \ref{fig:resfit1} and \ref{fig:resfit1b}), so we now move to the variance parameters.
+
+
+## Variance parameters (keyVarObs parameters)
+
+In Figure \ref{fig:resfit1}, we see some residuals are clearly larger than others, i.e., ages 1-2 for the A-fleet, ages 0-1 for the C- and F-fleets. This is also very clear in Figure \ref{fig:resfit3b}. Dealing with all the fleets at once creates some convergence issues. As a result we first start with the largest residuals, i..e., uncoupling the variances for age 0 of the F-fleet fleets as follows:
+
+```{r, results='markup'}
+## Modify the configuration
+conf3 <- conf1
+conf3$keyVarObs
+conf3$keyVarObs[which(attr(dat, "fleetNames")=="A-fleet"),2:3] <- max(conf3$keyVarObs)+1
+conf3$keyVarObs[which(attr(dat, "fleetNames")=="C-fleet"),1:2] <- max(conf3$keyVarObs)+c(1:2)
+conf3$keyVarObs[which(attr(dat, "fleetNames")=="F-fleet"),1:2] <- max(conf3$keyVarObs)+c(1:2)
+conf3$keyVarObs
+```
+
+Note that we use the same parameter for ages 1 and 2 of the A-fleet. This is because we did try two parameters and we get similar values for both so for simplicity we use only one here.
+
+```{r fit3}
+## Fit with new configuration
+par3<-defpar(dat,conf3)
+fit3<-sam.fit(dat,conf3,par3)
+attr(fit3, "comment") <- "Couple variance parameters for ages 1-2 A-fleet, and uncouple ages 0-1 C- and F-fleets"
+```
+
+```{r, results='markup'}
+## Check new fit convergence and AIC
+fit3$sdrep
+AIC(fit1)
+AIC(fit3)
+```
+
+```{r resfit3, echo=FALSE, fig.cap="Residual plots for the fit 'fit3'.", fig.dim=c(8,8)}
+## New residuals and plot
+set.seed(seed, sample.kind = "Rounding")
+res3 <- residuals(fit3)
+plot(res3)
+```
+
+```{r resfit3b, echo=FALSE, fig.cap="Residual diagnostic plots for the fit 'fit3'.", fig.dim=c(15,15)}
+par(cex.axis=0.8)
+residplot(fit3, resid=res3, bubbles = FALSE)
+```
+
+```{r retrofit3, error=TRUE}
+retro3 <- retro(fit3, year = MAT)
+```
+
+The model has converged but the variance of the process error on survival is getting to zero. This creates now an instability that makes the residuals look really bad (Figures \ref{fig:resfit3} and \ref{fig:resfit3b}) and the retrospective patterns difficult to run. 
+
+There is almost no information in catch for ages 4-8+ of the D-fleet. We therefore try coupling the fishing mortality parameters for ages 3-8+ to see if it can improve the model stability:
+
+```{r, results='markup'}
+## Modify the configuration
+conf3b <- conf3
+conf3b$keyLogFsta
+conf3b$keyLogFsta[3,4:9]<- 18
+conf3b$keyLogFsta[4,]<- conf3b$keyLogFsta[4,]-4
+conf3b$keyLogFsta
+```
+
+```{r fit3b}
+## Fit with new configuration
+par3b<-defpar(dat,conf3b)
+fit3b<-sam.fit(dat,conf3b,par3b)
+attr(fit3b, "comment") <- "Couple ages for 3-8+ for the D-fleet"
+```
+
+```{r, results='markup'}
+## Check new fit convergence and AIC
+fit3b$sdrep
+AIC(fit3)
+AIC(fit3b)
+```
+
+```{r resfit3bb, echo=FALSE, fig.cap="Residual plots for the fit 'fit3b'.", fig.dim=c(8,8)}
+## New residuals and plot
+set.seed(seed, sample.kind = "Rounding")
+res3b <- residuals(fit3b)
+plot(res3b)
+```
+
+
+Unfortunately, AIC is not better for "fit3b" and the residuals are not improved (Figure \ref{fig:resfit3bb}). 
+
+The problem with the process error on survival is still present with "fit3b". SAM does not allow the option to have no error around the survival equation but it is possible to fix the parameter to a small value to force the process error to be zero. As a result, we fix the parameter to a low value to allow tuning further. Please note that some tests were done in parallel using historical catch data prior to 1991, and it does not fix this problem and the model using historical data show similar instability.
+
+```{r fit4}
+## Fix error on survival from fit3
+par4<-defpar(dat,conf3)
+par4$logSdLogN[2] <- -5 # low value for the process error in survival
+map4 <- fit3$obj$env$map
+map4$logSdLogN <- factor(c(0,NA))
+fit4<-sam.fit(dat,conf3,par4,map=map4)
+attr(fit4, "comment") <- "Fix process error on survival parameter to -5 from fit3"
+```
+
+Here the process variance parameter is fixed to `r par4$logSdLogN[2]` leading to a variance on the survival of `r round(exp(par4$logSdLogN[2]), 4)`. Using a lower value as the one estimated in "fit3", i.e., `r round(fit3$pl$logSdLogN[2])` leads to model instability. 
+
+```{r, results='markup'}
+## Check new fit convergence and AIC
+fit4$sdrep
+AIC(fit3)
+AIC(fit4)
+```
+
+
+```{r resfit4, echo=FALSE, fig.cap="Residual plots for the fit 'fit4'.", fig.dim=c(8,8)}
+## New residuals and plot
+set.seed(seed, sample.kind = "Rounding")
+res4 <- residuals(fit4)
+plot(res4)
+```
+
+```{r resfit4b, echo=FALSE, fig.cap="Residual diagnostic plots for the fit 'fit4'.", fig.dim=c(15,15)}
+par(cex.axis=0.8)
+residplot(fit4, resid=res4, bubbles = FALSE)
+```
+
+The new "fit4" leads to almost identical parameter values as "fit3", but this time the residuals look reasonable (Figures \ref{fig:resfit4} and \ref{fig:resfit4b}). The large residuals have now disappeared for the A-, C-, and F-fleets. While it is not ideal to fix a parameter, the improvement in model stability compared to "fit3" is significant.
+
+```{r, error=TRUE}
+retro4 <- retro(fit4, year = MAT)
+```
+
+However, the retrospective patterns are still difficult to run. One way to solve this problem is to reduce the Newton steps in the "sam.fit" function to zero but this leads to retro runs that are shown as non-converged despite giving reasonable results (Figure \ref{fig:retrofit4}).
+
+```{r, results='markup'}
+retro4 <- retro(fit4, year = MAT, newtonsteps=0)
+rho4 <- mohn(retro4)
+sapply(retro4, function(x) x$opt$convergence==0)
+retro4[[1]]$sdrep
+```
+
+```{r retrofit4, echo=FALSE, fig.cap="Retrospective patterns for the fit 'fit4' run without Newton steps.", fig.dim=c(6,10)}
+par(mfrow=c(3,1))
+ssbplot(retro4, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho4[2]))), bty="n")
+fbarplot(retro4, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho4[3]))), bty="n")
+recplot(retro4, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho4[1]))), bty="n")
+```
+
+Another way to solve the retro problem is to modify the "runwithout" function used in the "retro" function to provide better starting value for the runs. This option was already used since the multifleet model was chosen as assessment model in 2018, as follows:
+
+```{r}
+## Code used on stockassessment.org for the multifleet model:
+myrunwithout <- function(fit, year=NULL, fleet=NULL, ...){
+  data <- reduce(fit$data, year=year, fleet=fleet, conf=fit$conf) 
+  conf <- attr(data, "conf")
+  pd <- defpar(data,conf)
+  par<-fit$pl
+  par$logFpar[]<-0 # change in 2025
+  par$logN<-pd$logN
+  par$logF<-pd$logF  
+  par$missing<-NULL
+  attr(par, "what") <- NULL
+  ret <- sam.fit(data, conf, par, map=fit$obj$env$map, ...)
+  return(ret)
+}
+
+myretro <- function(fit, year=NULL, ncores=detectCores(), ...){
+  data <- fit$data
+  y <- fit$data$aux[,"year"]
+  f <- fit$data$aux[,"fleet"]
+  suf <- sort(unique(f))
+  maxy <- sapply(suf, function(ff)max(y[f==ff]))
+  if(length(year)==1){
+    mat <- sapply(suf,function(ff){my<-maxy[ff];my:(my-year+1)})
+  }
+  if(is.vector(year) & length(year)>1){
+    mat <- sapply(suf,function(ff)year)
+  }
+  if(is.matrix(year)){
+    mat <- year
+  }
+
+  if(nrow(mat)>length(unique(y)))stop("The number of retro runs exceeds number of years")
+  if(ncol(mat)!=length(suf))stop("Number of retro fleets does not match")
+
+  setup <- lapply(1:nrow(mat),function(i)do.call(rbind,lapply(suf,function(ff)if(mat[i,ff]<=maxy[ff]){cbind(mat[i,ff]:maxy[ff], ff)})))
+  runs <- lapply(setup, function(s)myrunwithout(fit, year=s[,1], fleet=s[,2], ...))
+  attr(runs, "fit") <- fit
+  class(runs)<-"samset"
+  runs
+}
+```
+
+
+```{r}
+retro4b <- myretro(fit4, year = MAT)
+rho4b <- mohn(retro4b)
+```
+
+```{r, results='markup'}
+sapply(retro4b, function(x) x$opt$convergence==0)
+```
+
+```{r retrofit4b, echo=FALSE, fig.cap="Retrospective patterns for the fit 'fit4' run with new 'myretro' function.", fig.dim=c(6,10)}
+par(mfrow=c(3,1))
+ssbplot(retro4b, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho4b[2]))), bty="n")
+fbarplot(retro4b, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho4b[3]))), bty="n")
+recplot(retro4b, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho4b[1]))), bty="n")
+```
+
+The retro runs have now converged and the results are almost identical as the non-converged retro runs with zero Newton step (Figure \ref{fig:retrofit4b}).
+
+According to Figure \ref{fig:resfit4b} there is a significant larger variance for age 4 of HERAS, however, this is only visible for the first age 4 residual (Figure \ref{fig:resfit4}) so we ignore this. 
+We can also see a succession of positive residuals for HERAS at age 6+, however uncoupling the catchability for this age leads to non-convergence so this is ignored too.
+
+```{r catchbyfit4, echo=FALSE, fig.cap="Estimated vs. observed catch per fleet for the fit 'fit4'.", fig.dim=c(8,8)}
+mycatchbyfleetplot <- function (fit, obs.show = FALSE, fleet=NULL, ...) {
+  colSet = c("#332288", "#88CCEE", "#44AA99", "#117733", "#999933", "#DDCC77", "#661100", "#CC6677", "#882255", "#AA4499")
+  ciColSet = paste0(colSet, "80")
+  nf <- sum(fit$data$fleetTypes == 0)
+  if(missing(fleet)) fleet <- 1:nf
+  ct <- catchbyfleettable(fit, obs.show = TRUE)
+  x <- as.integer(rownames(ct))
+  matplot(rownames(ct), ct[, fleet], type = "l", lty = "solid", lwd = 3, ylab = "Catch", xlab = "Year", col = colSet[fleet], ylim = range(cbind(ct[,fleet], ct[,fleet+nf], ct[,nf*2+fleet], ct[,nf*3+fleet]), na.rm = TRUE))
+  for (f in fleet) {
+    polygon(c(x, rev(x)), y = c(ct[, nf + f], rev(ct[, 2 * nf + f])), border = gray(0.5, alpha = 0.5), col = ciColSet[f])
+    if (obs.show) {
+      matplot(rownames(ct), ct[, fleet + 3 * nf], cex = 1.2, pch = 4, lwd = 2, add = TRUE, col = colSet[fleet])
+    }
+  }
+  legend("topright", legend = sub("Catch", "", colnames(ct)[fleet]), col = colSet[fleet], lty = "solid", lwd = 3, bty="n")
+}
+
+par(mfrow=c(2,2))
+mycatchbyfleetplot(fit4, obs=TRUE, fleet=1)
+mycatchbyfleetplot(fit4, obs=TRUE, fleet=2)
+mycatchbyfleetplot(fit4, obs=TRUE, fleet=3)
+mycatchbyfleetplot(fit4, obs=TRUE, fleet=4)
+```
+
+Figure \ref{fig:resfit4b} also shows a significant mean-variance relationship [@breivik2021] for the C-fleet. 
+It is true that the residuals seem larger at the end of the time series (Figure \ref{fig:resfit4}). In addition, the large observed catches of the F-fleet are not well estimated in the early 2000's (Figure \ref{fig:catchbyfit4}). We therefore now test tuning the mean-variance relationship.
+
+## Mean-variance relationship (predVarObsLink parameter) {#predVarObs}
+
+Here we test including the relationship one fleet at a time:
+
+```{r, results='markup'}
+## Modify the configuration
+conf5 <- fit4$conf
+conf5$predVarObsLink
+conf5$predVarObsLink[which(attr(dat, "fleetNames")=="C-fleet"),] <- 0
+conf5$predVarObsLink
+```
+
+```{r fit5, error=TRUE}
+## Fit with new configuration
+par5<-defpar(dat,conf5)
+par5$logSdLogN[2] <- fit4$pl$logSdLogN[2] 
+fit5<-sam.fit(dat,conf5,par5, map=map4)
+```
+
+```{r, echo=FALSE}
+# For summary reporting purposes:
+fit5 <- fit1
+attr(fit5, "comment") <- "Mean-variance relationship for C-fleet"
+fit5$opt$convergence <- 1
+fit5$opt$objective<- NA
+```
+
+The model does not converged with mean-variance relationship on the C-fleet.
+
+
+
+```{r, results='markup'}
+## Modify the configuration
+conf6 <- fit4$conf
+conf6$predVarObsLink
+conf6$predVarObsLink[which(attr(dat, "fleetNames")=="F-fleet"),] <- 0
+conf6$predVarObsLink
+```
+
+```{r fit6, error=TRUE}
+## Fit with new configuration
+par6<-defpar(dat,conf6)
+par6$logSdLogN[2] <- fit4$pl$logSdLogN[2] 
+fit6<-sam.fit(dat,conf6,par6, map=map4)
+```
+
+```{r, echo=FALSE}
+# For summary reporting purposes:
+fit6 <- fit1
+attr(fit6, "comment") <- "Mean-variance relationship for F-fleet"
+fit6$opt$convergence <- 1
+fit6$opt$objective<- NA
+```
+
+The model does not converged with mean-variance relationship on the F-fleet.
+
+It is therefore not possible to consider mean-variance relationship for the multifleet model.
+
+It does not look like we can improve much more from the model "fit4" (Figure \ref{fig:resfit4}). The model unfortunately suffers from having many zeros in the catch data (especially D-fleet) and is quite difficult to tune.
+
+
+
+
+## Tuning conclusions 
+
+Table \ref{tab:summary} summarizes the different options tested during the tuning. The best model obtained is "fit4" because it presents the best AIC and residuals (Figure \ref{fig:resfit4}). This fit has a fixed parameter compared to "fit3" but the residuals for "fit3" were not acceptable (Figures \ref{fig:resfit3} and \ref{fig:resfit3b}).
+
+```{r, echo=FALSE}
+tmp <- ls()[grep("fit", ls())]
+fits_names <- stringi::stri_sort(tmp, numeric=TRUE)
+fits_names[1] <- tmp[2]
+fits_names[2] <- tmp[1]
+fits_names <- fits_names[-length(fits_names)] # remove fitFinal from list
+rhos <- paste0("rho", gsub("fit", "", fits_names))
+toextract <- c("Number of parameters", "Convergence", "AIC", "Mohn's rho SSB", "Mohn's rho Fbar", "Comments")
+table_out <- matrix(NA, nrow=length(fits_names), ncol=length(toextract), dimnames = list(fits_names, toextract))
+
+for(i in seq(fits_names)){
+  table_out[i,] <- c(length(get(fits_names[i])$sdrep$par.fixed),
+                     get(fits_names[i])$opt$convergence==0,
+                     round(AIC(get(fits_names[i]))),
+                     tryCatch(round(get(rhos[i])[2:3]*100), error=function(err) rep(NA, 2)),
+                     attr(get(fits_names[i]), "comment"))
+                     
+} 
+```
+
+```{r summary, echo=FALSE, results='markup'}
+library(kableExtra)
+kable(table_out, "latex", booktabs = T, caption = "Summary of the fits obtained during tuning.") %>%
+kable_styling(latex_options = c("striped", "scale_down"))
+```
+
+
+We now look in detail at all the diagnostics for "fit4".
+
+
+# Additional diagnostics for the best model
+
+The general model outputs (SSB, Fbar, recruitment) are shown in Figure \ref{fig:plotfit4}, and the estimated fishing mortality at age per fleet in Figures \ref{fig:Fa}-\ref{fig:Ff}.
+
+```{r plotfit4, echo=FALSE, fig.cap="SSB, Fbar, and recruitment plot for 'fit4'.", fig.dim=c(10,10)}
+plot(fit4, partial=FALSE)
+```
+
+```{r Fa, echo=FALSE, fig.cap="Fishing mortality for the A-fleet.", fig.dim=c(6,6)}
+col <- rep(1:6,fit4$data$noYears)
+fl <- 1
+matplot(y=t(faytable(fit4, fleet=fl)), x=as.numeric(rownames(t(faytable(fit4, fleet=fl)))), type="l", xlab="Age", ylab="A-fleet F at age")
+for (i in 1:fit4$data$noYears) text(y=t(faytable(fit4, fleet=fl)[i,]), x=as.numeric(rownames(t(faytable(fit4, fleet=fl)))), labels = fit4$data$years[i], cex = 0.7, col=col[i])
+```
+
+```{r Fc, echo=FALSE, fig.cap="Fishing mortality for the C-fleet.", fig.dim=c(6,6)}
+col <- rep(1:6,fit4$data$noYears)
+fl <- 2
+matplot(y=t(faytable(fit4, fleet=fl)), x=as.numeric(rownames(t(faytable(fit4, fleet=fl)))), type="l", xlab="Age", ylab="C-fleet F at age")
+for (i in 1:fit4$data$noYears) text(y=t(faytable(fit4, fleet=fl)[i,]), x=as.numeric(rownames(t(faytable(fit4, fleet=fl)))), labels = fit4$data$years[i], cex = 0.7, col=col[i])
+```
+
+```{r Fd, echo=FALSE, fig.cap="Fishing mortality for the D-fleet.", fig.dim=c(6,6)}
+col <- rep(1:6,fit4$data$noYears)
+fl <- 3
+matplot(y=t(faytable(fit4, fleet=fl)), x=as.numeric(rownames(t(faytable(fit4, fleet=fl)))), type="l", xlab="Age", ylab="D-fleet F at age")
+for (i in 1:fit4$data$noYears) text(y=t(faytable(fit4, fleet=fl)[i,]), x=as.numeric(rownames(t(faytable(fit4, fleet=fl)))), labels = fit4$data$years[i], cex = 0.7, col=col[i])
+```
+
+```{r Ff, echo=FALSE, fig.cap="Fishing mortality for the F-fleet.", fig.dim=c(6,6)}
+col <- rep(1:6,fit4$data$noYears)
+fl <- 4
+matplot(y=t(faytable(fit4, fleet=fl)), x=as.numeric(rownames(t(faytable(fit4, fleet=fl)))), type="l", xlab="Age", ylab="F-fleet F at age")
+for (i in 1:fit4$data$noYears) text(y=t(faytable(fit4, fleet=fl)[i,]), x=as.numeric(rownames(t(faytable(fit4, fleet=fl)))), labels = fit4$data$years[i], cex = 0.7, col=col[i])
+```
+
+The fit to catch observations and survey indices is shown in Figures \ref{fig:fitplot} and \ref{fig:fitplot2}, respectively.
+
+```{r fitplot, echo=FALSE, fig.cap="Estimated (line) vs. observed (dot) catch at age (numbers on log scale).", fig.dim=c(10,10)}
+par(mar=c(2,2,1,2))
+fitplot(fit4, fleet=c(1:4,9), ylim=c(0, 15))
+```
+
+```{r fitplot2, echo=FALSE, fig.cap="Estimated (line) vs. observed (dot) index at age (thousand on log scale).", fig.dim=c(10,10)}
+par(mar=c(2,2,1,2))
+fitplot(fit4, fleet=5:8)#, ylim=c(5, 15))
+```
+
+The F- and C-fleets (ages 2-8+) are the most trusted by the model, then GERAS, IBTS/BITS Q1, HERAS, and the A-fleet (ages 3-8), the other fleets and ages have large standard errors (Figure \ref{fig:sdplot}).
+
+```{r sdplot, echo=FALSE, fig.cap="Estimated standard deviation for observations", fig.dim=c(6,6)}
+sdplot(fit4)
+```
+
+The "leaveout" function in SAM needs to be modified to fix the survival parameter as follows:
+
+```{r, results='markup', fig.cap="Leave out plot", fig.dim=c(6,6)}
+myleaveout <- function (fit, fleet = as.list(2:fit$data$noFleets), ncores = detectCores(), ...) {
+  myrunwithout <- function(fit, year=NULL, fleet=NULL, ...){
+  data <- reduce(fit$data, year=year, fleet=fleet, conf=fit$conf)      
+  data$sumKey <- data$sumKey[-fleet,] # added
+  conf <- attr(data, "conf")
+  pd <- defpar(data,conf)
+  par <- pd # added
+  par$logSdLogN[2] <- fit$pl$logSdLogN[2] # added
+  if (fleet==8) par$logFpar[]<-0 # added to help convergence
+  par$missing<-NULL
+  attr(par, "what") <- NULL
+  ret <- sam.fit(data, conf, par, map=fit$obj$env$map, ...)
+  return(ret)
+  }
+    if (ncores > 1) {
+        cl <- makeCluster(ncores)
+        on.exit(stopCluster(cl))
+        clusterExport(cl, varlist = "fit", envir = environment())
+        lib.ver <- dirname(path.package("stockassessment"))
+        clusterExport(cl, varlist = "lib.ver", envir = environment())
+        clusterEvalQ(cl, {
+            library(stockassessment, lib.loc = lib.ver)
+        })
+        runs <- parLapply(cl, fleet, function(f) myrunwithout(fit, fleet = f, ...))
+    }
+    else {
+        runs <- lapply(fleet, function(f) myrunwithout(fit, fleet = f, ...))
+    }
+    converg <- unlist(lapply(runs, function(x) x$opt$conv))
+    if (any(converg != 0)) 
+        warning(paste0("leavout run(s) ", paste0(which(converg != 0), collapse = ","), " did not converge."))
+    names(runs) <- paste0("w.o. ", lapply(fleet, function(x) paste(attr(fit$data, "fleetNames")[x], collapse = " and ")))
+    attr(runs, "fit") <- fit
+    class(runs) <- "samset"
+    runs
+}
+fl <- which(dat$fleetTypes==2)
+LO <- myleaveout(fit4, fleet=fl)
+sapply(LO, function(x) x$opt$convergence==0) # check convergence
+```
+
+```{r LO, echo=FALSE, fig.cap="Leave one survey out plot for 'fit4'", fig.dim=c(10,10)}
+plot(LO)
+```
+
+Note that new starting values for the catchability parameters were needed to help convergence for the fleet removing the IBTS/BITS Q1 survey. The resulting outputs look very reasonable (Figure \ref{fig:LO}). 
+
+Similarly to the "leaveout" function, the "jit" function needs also to be modified to allow for fixing parameters and having a map argument:
+
+```{r, results='markup'}
+myjit <- function (fit, nojit = 10, par = defpar(fit$data, fit$conf), sd = 0.25, 
+                   ncores = parallel::detectCores(), map=NULL, ...) {
+  parv <- unlist(par)
+  pars <- lapply(1:nojit, function(i) relist(parv + rnorm(length(parv), sd = sd), par))
+  if (!is.null(map)){
+    for (i in 1:length(map)){ 
+      for (j in 1:length(pars)){ 
+        pars[[j]][[names(map)[i]]] <- par[[names(map)[i]]]
+      }
+    }
+  }
+  if (ncores > 1) {
+    cl <- parallel::makeCluster(ncores)
+    on.exit(parallel::stopCluster(cl))
+    lib.ver <- dirname(path.package("stockassessment"))
+    parallel::clusterExport(cl, varlist = c("fit", "lib.ver", "map"), envir = environment())
+    parallel::clusterEvalQ(cl, {
+      library(stockassessment, lib.loc = lib.ver)
+    })
+    fits <- parallel::parLapply(cl, pars, function(p) sam.fit(fit$data, fit$conf, p, silent = TRUE, map=map, ...))
+  }
+  else {
+    fits <- lapply(pars, function(p) sam.fit(fit$data, fit$conf, p, silent = TRUE, map=map, ...))
+  }
+  attr(fits, "fit") <- fit
+  attr(fits, "jitflag") <- 1
+  class(fits) <- c("samset")
+  fits
+}
+fn <- function(x){
+  if ("jitflag" %in% names(attributes(x))) {
+    fit <- attr(x, "fit")
+    maxabsdiff <- apply(abs(do.call(cbind, lapply(x, function(f) unlist(f$pl) - unlist(fit$pl)))), 1, max)
+    maxlist <- relist(maxabsdiff, fit$pl)
+    ret <- as.data.frame(unlist(lapply(maxlist, function(x) if (length(x) > 0) max(x) else NULL)))
+    fbar <- max(unlist(lapply(x, function(f) abs(fbartable(f)[, 1] - fbartable(fit)[, 1]))))
+    ssb <- max(unlist(lapply(x, function(f) abs(ssbtable(f)[, 1] - ssbtable(fit)[, 1]))))
+    rec <- max(unlist(lapply(x, function(f) abs(rectable(f)[, 1] - rectable(fit)[, 1]))))
+    catch <- max(unlist(lapply(x, function(f) abs(catchtable(f)[, 1] - catchtable(fit)[, 1]))))
+    logLik <- max(abs(unlist(lapply(x, logLik)) - logLik(fit)))
+    ret <- rbind(ret, ssb = ssb, fbar = fbar, rec = rec, catch = catch, logLik = logLik)
+    names(ret) <- "max(|delta|)"
+    (ret)
+  }
+}
+
+fn1 <- function(x) max(fn(x)[-which(rownames(fn(x)) %in% c("logFScaleMSY", "implicitFunctionDelta", "splinePenalty" )),])
+
+set.seed(seed+2, sample.kind = "Rounding") # note the seed change!
+parjit <- par4
+parjit$logFpar[]<-0 # added to allow convergence!!!!!!
+jitTest <- myjit(fit=fit4, nojit = 10, par=parjit, map=map4)
+sapply(jitTest, function(x) x$opt$convergence==0) # check convergence
+fn1(jitTest)
+```
+
+```{r jit, echo=FALSE, fig.cap="Jitter test outputs for 'fit4'", fig.dim=c(10,10)}
+plot(jitTest) 
+```
+
+To allow full convergence, it was necessary to change the seed and change the initial parameters for the catchability. The jitter outputs show one run that deviates from the "fit4" outputs, the one that has not converged (Figure \ref{fig:jit}). The other fits are on top of "fit4".
+
+Similarly to "jit", the "simstudy" function needs to be modified to allow for fixing parameters and having a map argument. In addition, the function was allowed to not stop if the optimization leads to NaN (using the "tryCatch" function):
+
+```{r, results='markup'}
+mysimstudy <- function (fit, nsim, ncores = detectCores(), map, par, ...) {
+  simdata <- simulate(fit, nsim = nsim, full.data = TRUE)
+  if (ncores > 1) {
+    cl <- parallel::makeCluster(ncores)
+    on.exit(parallel::stopCluster(cl))
+    lib.ver <- dirname(path.package("stockassessment"))
+    parallel::clusterExport(cl, varlist = c("lib.ver", "map", "par"), envir = environment())
+    parallel::clusterEvalQ(cl, {
+      library(stockassessment, lib.loc = lib.ver)
+    })
+    runs <- parallel::parLapply(cl, simdata, function(x) tryCatch(sam.fit(x, fit$conf, par, map=map, ...), error=function(e) NA))
+  }
+  else {
+    runs <- lapply(simdata, function(x) tryCatch(sam.fit(x, fit$conf, par, map=map, ...), error=function(e) NA))
+  }
+  attr(runs, "fit") <- fit
+  class(runs) <- "samset"
+  runs
+}
+set.seed(seed, sample.kind = "Rounding") # note the seed change!
+simTest <- mysimstudy(fit=fit4, nsim=20, par=parjit, map=map4) # here we use same parameters as jitter test
+pbRun <- which(sapply(simTest, function(x) is.na(x[1]))==TRUE)
+simTest <- simTest[-pbRun]
+class(simTest) <- "samset"
+sum(sapply(simTest, function(x) x$opt$convergence==0))
+```
+
+```{r sim, echo=FALSE, fig.cap="Simulation study outputs for 'fit4'", fig.dim=c(10,10)}
+plot(simTest)
+```
+
+The converged simulations presents reasonable outputs but some runs get outside the confidence interval of the original fit. In addition, over the 20 simulations `r 20-sum(sapply(simTest, function(x) x$opt$convergence==0))` have not converged. 
+
+The best model presents acceptable residuals and retrospective patterns but shows many signs of instability, which will likely lead to difficulty in fitting the model in future data updates. The numerous zeros in the D-fleet does not help model robustness. Allowing the commercial fleet to have a maximum age group at age 3 or 4 would help but necessitate code development in SAM.
+
+
+# Estimate a stock-recruitemnt relationship (SRR)
+
+Here we see if it is possible to fit an SRR from fit4:
+
+```{r, results='markup'}
+## Modify the configuration
+conf7 <- conf3
+conf7$stockRecruitmentModelCode <- 61
+```
+
+```{r fit7}
+## Fit with new configuration
+par7<-defpar(dat,conf7)
+par7$logSdLogN[2] <- fit4$pl$logSdLogN[2] 
+fit7<-sam.fit(dat,conf7,par7, map=map4)
+attr(fit7, "comment") <- "Hockey-stick SRR from fit4"
+```
+
+```{r, results='markup'}
+## Check new fit convergence and AIC
+fit7$sdrep
+AIC(fit4)
+AIC(fit7)
+```
+
+```{r srfit7, echo=FALSE, fig.cap="Stock-recruitment pairs for the fitted object 'fit7'. The solid line and shaded area show the estimated stock-recruitment curve and its 95% confidence interval. The dashed lines show the predicted confidence intervals used for simulations.", fig.dim=c(6,6)}
+srplot(fit7, ylim=c(0, 1.2e+8))
+addRecruitmentCurve(fit7, CI=FALSE, PI=TRUE)
+```
+
+```{r resfit7, fig.cap="Residual plots for the fit 'fit7'.", fig.dim=c(8,8)}
+## New residuals and plot
+set.seed(seed, sample.kind = "Rounding")
+res7 <- residuals(fit7)
+plot(res7)
+```
+
+```{r resfit7b, fig.cap="Residual diagnostic plots for the fit 'fit7'.", fig.dim=c(15,15)}
+par(cex.axis=0.8)
+residplot(fit7, resid=res7, bubbles = FALSE)
+```
+
+```{r retrofit7, echo=FALSE, fig.cap="Retrospective patterns for the fit 'fit7'.", fig.dim=c(6,10)}
+retro7 <- myretro(fit7, year = MAT)
+rho7 <- mohn(retro7)
+
+par(mfrow=c(3,1))
+ssbplot(retro7, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho7[2]))), bty="n")
+fbarplot(retro7, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho7[3]))), bty="n")
+recplot(retro7, las=0)
+legend("topright", legend=substitute(rho[Mohn]==RR~'%', list(RR=round(100*rho7[1]))), bty="n")
+
+```
+
+It is possible to estimate a reasonable SRR with the multifleet model with getting reasonable residuals (Figures \ref{fig:resfit7} and \ref{fig:resfit7b}) and retrospective patterns (Figure \ref{fig:retrofit7}). Similarly to the single fleet model, Mohn's rhos increase with an SRR.
+
+```{r, echo=FALSE}
+table_out2 <- rbind(table_out, "fit7"=c(length(fit7$sdrep$par.fixed),
+                     fit7$opt$convergence==0,
+                     round(AIC(fit7)),
+                     round(rho7[2:3]*100),
+                     attr(fit7, "comment")))
+```
+
+```{r summary2, echo=FALSE, results='markup'}
+library(kableExtra)
+kable(table_out2, "latex", booktabs = T, caption = "Summary of the fits obtained during tuning.") %>%
+kable_styling(latex_options = c("striped", "scale_down")) 
+```
+
+Table \ref{tab:summary2} summarizes all the fits including "fit7".
+
+
+```{r, echo=FALSE}
+fits_names <- c(fits_names, "fit7")
+tmp <- paste0("save(", paste(fits_names, collapse = ","), ", file='results/fits_tuning_mf.RData')")
+eval(parse(text=tmp))
+```
+
+
+
+\clearpage
+
+# References
