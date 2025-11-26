@@ -1417,6 +1417,10 @@ kable_styling(latex_options = c("striped", "scale_down"))
 
 Table \ref{tab:summary2} summarizes the main diagnostics for all the fits mentioned in the document. If we were to choose the single fleet model as assessment model, we propose to use "fit15" to allow internal estimation of reference points in SAM.
 
+```{r, echo=FALSE}
+save(fit15, file='results/fits15_sf.RData')
+```
+
 
 # References
 
