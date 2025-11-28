@@ -1,0 +1,589 @@
+---
+title: "Working document: Additionnal information on the single fleet model for WBSS herring"
+author: Vanessa Trijoulet
+output:
+  bookdown::pdf_document2: default
+bibliography: refs.bib
+date: "`r format(Sys.Date(), '%d %B %Y')`"
+header-includes:
+  - \usepackage{pdflscape}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE,
+	cache = TRUE,
+	results = "hide",
+	tidy = TRUE,
+	tidy.opts = list(width.cutoff = I(90))
+)
+seed <- 1234 
+qplot <-function(fit, ...){
+  Q <- fit$conf$keyLogFpar
+  Q[] <- exp(fit$pl$logFpar)[ifelse(Q<0,NA,Q+1)]
+  ages <- fit$conf$minAge:fit$conf$maxAge
+  Q <- Q/rowMeans(Q, na.rm=T)
+  idx <- apply(Q,1,function(x)!all(is.na(x)))
+  Q <- Q[idx,]
+  matplot(ages, t(Q), type="b", lwd=4, ylab="Standardized catchability", pch=1, col=1:10, lty=1:10, ...)
+  fn<-attr(fit$data, "fleetNames")[idx]
+  legend("topright", legend=fn, lty=1:10, lwd=4, col=1:10, bty="n")
+}
+
+library(stockassessment)
+library(parallel)
+library(kableExtra)
+load("results/fitFinal.RData")
+load("results/fits15_sf.RData")
+```
+
+At the benchmark pre-meeting, it was decided to choose the single fleet model as assessment model. As a result, two fits can be considered from "WD_tuning_sf.pdf": "fitFinal" or "fit15", the latter only differing by the use of a hockey-stick stock-recruitment relationship (SRR). This is notably relevant if we want to estimate the reference points internally in SAM [@albertsen2020], as it has been shown that using ad hoc software can lead to reference point bias [@trijoulet2022msy].
+
+In the WD we first look again at the Fbar range after some question were raised at the pre-meeting (section \ref{range}).
+The robustness of "fitFinal" was demonstrated in "WD_tuning_sf.pdf". In this WD, we investigate the robustness of "fit15". We first show that estimating an SRR in SAM cal lead to lack of robustness of the model (section \ref{normal}). We then propose a way to solve this problem and demonstrate that this leads to good model outputs (section \ref{fixed}). Finally we compare all the outputs for both fits (section \ref{comp}).
+
+
+# Fbar range {#range}
+
+In WD_tuning_sf.pdf, we propose to use ages 2-5 as new Fbar range. The Fbar range was not investigated at the last benchmark [@ICES2018wkpela], so this is the first investigation in a long time. Here we provide additional information on how the proportion of each age change over time.
+
+```{r, results='markup'}
+canum <- getFleet(fitFinal, 1, pred=FALSE)
+caton <- canum*fitFinal$data$catchMeanWeight[,,"Residual catch"]
+prop <- caton/apply(caton,1,sum)
+prop2 <- rbind(prop, "Mean"=apply(prop,2,mean))
+```
+
+```{r prop, echo=FALSE}
+kable(round(prop2*100), "latex", booktabs = T, caption = "Proportion of catch in weight per age.") %>%
+kable_styling(latex_options = c("striped"))  
+```
+
+```{r caton, echo=FALSE, fig.cap="Catch at age (t) used in the model.", fig.dim=c(10,10)}
+par(mfrow=c(3,2))
+for (y in seq(1,34,6)){
+matplot(y=t(caton)[,y:min(y+5, nrow(caton))], x=as.numeric(rownames(t(caton))), type="l", xlab="Age", ylab="Catch (t)", col=1:6, main=paste0(min(rownames(caton)[y:min(y+5, nrow(caton))]), "-", max(rownames(caton)[y:min(y+5, nrow(caton))])))
+for (i in y:min(y+5, nrow(caton))) text(y=t(caton)[,i], x=as.numeric(rownames(t(caton))), labels = colnames(t(caton))[i], cex = 0.7, col=which(y:min(y+5, nrow(caton))==i))
+}
+```
+
+It was discussed at the benchmark preparation meeting that 1-6 could also be an option. The catch curve peaks at different ages over time, but a peak at age 1 only occurs early in the time series (Figure \ref{fig:caton}) and since 2012, the proportion of catch at age 1 is less than 10\% (except in 2020, Table \ref{tab:prop}). However, in the recent part of the time series, there are more catches at age 6 as before.
+To have a range that include ages that are present a stable proportion of the catch over time, we still use the ages 2-5 as range for Fbar.
+
+
+In the tuning WD, we showed in detail that the "fitFinal" is robust to all diagnostics, but this was not showed for fit15 that includes an SRR. In this WD document we therefore investigate the diagnostics for this latter fit further.
+
+
+# Check robustness of fit15
+
+As mentioned in WD_tuning_sf.pdf, estimating the reference points within the model would help consistency between assessment and reference points over the years. Having a stock-recruitment relationship is therefore considered important, and can motivate choosing the "fit15" as final assessment model.
+
+In principle, if an SRR is used in the model, the reference points should be estimated every year to avoid discrepancy when a new SRR is potentially estimated at each update. However, our personal experience is that using an SRR decreases model's robustness. There is therefore a risk that the model does not converge in the future after updating the data. A possibility to solve this instability problem could be to fix the SRR parameters in future assessment updates. As a result, the reference points could also be kept constant between benchmarks, which is the current method used in ICES for most stocks. 
+
+Below, we show that lack of robustness of the "fit15" if we were to estimate the SRR every year (section \ref{normal}). We then show that if the SRR parameters are fixed between benchmarks, the model will be robust (section \ref{fixed}).
+
+
+## If we estimate reference points every year {#normal}
+
+The following diagnostics are consistent if the SRR is estimated at each update, which means that the reference points need to be estimating every year.
+
+```{r retrofit15, echo=FALSE, fig.cap="Retrospective patterns for the fit 'fit15'.", fig.dim=c(6,10)}
+retro15 <- retro(fit15, year = 5)
+rho15 <- mohn(retro15)
+retro1510 <- retro(fit15, year = 10)
+rho1510 <- mohn(retro1510)
+
+par(mfrow=c(3,1))
+ssbplot(retro1510, las=0)
+legend("topright", legend=substitute(rho[Mohn](10)==RR~'%'~~~rho[Mohn](5)==RRR~'%', list(RR=round(100*rho1510[2]), RRR=round(100*rho15[2]))), bty="n")
+fbarplot(retro1510, las=0)
+legend("topright", legend=substitute(rho[Mohn](10)==RR~'%'~~~rho[Mohn](5)==RRR~'%', list(RR=round(100*rho1510[3]), RRR=round(100*rho15[3]))), bty="n")
+recplot(retro1510, las=0)
+legend("topright", legend=substitute(rho[Mohn](10)==RR~'%'~~~rho[Mohn](5)==RRR~'%', list(RR=round(100*rho1510[1]), RRR=round(100*rho15[1]))), bty="n")
+```
+
+The retrospective patterns are presented again in Figure \ref{fig:retrofit15}.
+
+```{r, results='markup', error=TRUE}
+LO <- leaveout(fit15)
+```
+
+The "leaveout" run leads to convergence problems with the code as it is.
+
+```{r, results='markup', error=TRUE}
+fn <- function(x){
+  if ("jitflag" %in% names(attributes(x))) {
+    fit <- attr(x, "fit")
+    maxabsdiff <- apply(abs(do.call(cbind, lapply(x, function(f) unlist(f$pl) - unlist(fit$pl)))), 1, max)
+    maxlist <- relist(maxabsdiff, fit$pl)
+    ret <- as.data.frame(unlist(lapply(maxlist, function(x) if (length(x) > 0) max(x) else NULL)))
+    fbar <- max(unlist(lapply(x, function(f) abs(fbartable(f)[, 1] - fbartable(fit)[, 1]))))
+    ssb <- max(unlist(lapply(x, function(f) abs(ssbtable(f)[, 1] - ssbtable(fit)[, 1]))))
+    rec <- max(unlist(lapply(x, function(f) abs(rectable(f)[, 1] - rectable(fit)[, 1]))))
+    catch <- max(unlist(lapply(x, function(f) abs(catchtable(f)[, 1] - catchtable(fit)[, 1]))))
+    logLik <- max(abs(unlist(lapply(x, logLik)) - logLik(fit)))
+    ret <- rbind(ret, ssb = ssb, fbar = fbar, rec = rec, catch = catch, logLik = logLik)
+    names(ret) <- "max(|delta|)"
+    (ret)
+  }
+}
+
+fn1 <- function(x) max(fn(x)[-which(rownames(fn(x)) %in% c("logFScaleMSY", "implicitFunctionDelta", "splinePenalty" )),])
+
+
+set.seed(seed, sample.kind = "Rounding")
+jit <- jit(fit15, nojit = 10)
+```
+
+The jitter analysis leads to convergence problems and the absence of results with the code as it is.
+
+```{r, results='markup', error=TRUE}
+set.seed(seed, sample.kind = "Rounding")
+sim15 <- simstudy(fit15, 20)
+```
+
+The "simstudy" run leads also to convergence problems.
+
+The results above show the lack of robustness of the model if we were to estimate an SRR at each assessment update.
+
+## If we fix the SRR parameters between benchmarks {#fixed}
+
+The proposal is to fix the SRR parameters in between benchmark. As a result, we need to run the different robustness diagnostics fixing the SRR parameters so that they represent what will be done in the future. Some of the  functions in SAM needed to be slightly modified to allow for fixing parameters. 
+
+
+```{r retrofit15fix, echo=FALSE, fig.cap="Retrospective patterns for the fit 'fit15' when the SRR parameters are fixed.", fig.dim=c(6,10)}
+map15 <- fit15$obj$env$map
+map15$rec_pars <- factor(c(NA,NA))
+retro15fix <- retro(fit15, year = 5, map=map15, ncores=1)
+rho15fix <- mohn(retro15fix)
+retro1510fix <- retro(fit15, year = 10, map=map15, ncores=1)
+rho1510fix <- mohn(retro1510fix)
+
+par(mfrow=c(3,1))
+ssbplot(retro1510fix, las=0)
+legend("topright", legend=substitute(rho[Mohn](10)==RR~'%'~~~rho[Mohn](5)==RRR~'%', list(RR=round(100*rho1510fix[2]), RRR=round(100*rho15fix[2]))), bty="n")
+fbarplot(retro1510fix, las=0)
+legend("topright", legend=substitute(rho[Mohn](10)==RR~'%'~~~rho[Mohn](5)==RRR~'%', list(RR=round(100*rho1510fix[3]), RRR=round(100*rho15fix[3]))), bty="n")
+recplot(retro1510fix, las=0)
+legend("topright", legend=substitute(rho[Mohn](10)==RR~'%'~~~rho[Mohn](5)==RRR~'%', list(RR=round(100*rho1510fix[1]), RRR=round(100*rho15fix[1]))), bty="n")
+```
+
+The new retrospective patterns fixing the SRR are better than initially with slightly lower Mohn's rho for 5 peels but much better retros for 10 peels (Figure \ref{retrofit15fix}).
+
+While it was working in the "retro" function, we need to modify the "runwithout" function because fixing parameters does not work in the "leaveout" function as the parameters dimension changes when removing a survey:
+
+```{r}
+myleaveout <- function (fit, fleet = as.list(2:fit$data$noFleets), ncores = detectCores(), ...) {
+  myrunwithout <- function(fit, year=NULL, fleet=NULL, ...){
+  data <- reduce(fit$data, year=year, fleet=fleet, conf=fit$conf)      
+  data$sumKey <- data$sumKey[-fleet,] # added
+  conf <- attr(data, "conf")
+  pd <- defpar(data,conf)
+  par <- pd # added
+  par$rec_pars[] <- fit$pl$rec_pars # added
+  par$missing<-NULL
+  attr(par, "what") <- NULL
+  ret <- sam.fit(data, conf, par, ...) # deleted map
+  return(ret)
+  }
+    if (ncores > 1) {
+        cl <- makeCluster(ncores)
+        on.exit(stopCluster(cl))
+        clusterExport(cl, varlist = "fit", envir = environment())
+        lib.ver <- dirname(path.package("stockassessment"))
+        clusterExport(cl, varlist = "lib.ver", envir = environment())
+        clusterEvalQ(cl, {
+            library(stockassessment, lib.loc = lib.ver)
+        })
+        runs <- parLapply(cl, fleet, function(f) myrunwithout(fit, fleet = f, ...))
+    }
+    else {
+        runs <- lapply(fleet, function(f) myrunwithout(fit, fleet = f, ...))
+    }
+    converg <- unlist(lapply(runs, function(x) x$opt$conv))
+    if (any(converg != 0)) 
+        warning(paste0("leavout run(s) ", paste0(which(converg != 0), collapse = ","), " did not converge."))
+    names(runs) <- paste0("w.o. ", lapply(fleet, function(x) paste(attr(fit$data, "fleetNames")[x], collapse = " and ")))
+    attr(runs, "fit") <- fit
+    class(runs) <- "samset"
+    runs
+}
+LOfix <- myleaveout(fit15, map=map15, ncores=1)
+```
+
+```{r, results='markup'}
+sapply(LOfix, function(x) x$opt$convergence==0) # check convergence
+```
+
+```{r LOfix, echo=FALSE, fig.cap="Leave one survey out plot for 'fit15' when the SRR parameters are fixed.", fig.dim=c(10,10)}
+plot(LOfix)
+```
+
+The "leaveout" runs without problems and lead to good results with no conflict between the surveys (Figure \ref{fig:LOfix}).
+
+
+Similarly, the "jit" function needs to be modified to allow fixing the SRR parameters:
+
+```{r, results='markup'}
+myjit <- function (fit, nojit = 10, par = defpar(fit$data, fit$conf), sd = 0.25, 
+                   ncores = parallel::detectCores(), map=NULL, ...) {
+  parv <- unlist(par)
+  pars <- lapply(1:nojit, function(i) relist(parv + rnorm(length(parv), sd = sd), par))
+  if (!is.null(map)){
+    for (i in 1:length(map)){ 
+      for (j in 1:length(pars)){ 
+        pars[[j]][[names(map)[i]]] <- par[[names(map)[i]]]
+      }
+    }
+  }
+  if (ncores > 1) {
+    cl <- parallel::makeCluster(ncores)
+    on.exit(parallel::stopCluster(cl))
+    lib.ver <- dirname(path.package("stockassessment"))
+    parallel::clusterExport(cl, varlist = c("fit", "lib.ver", "map"), envir = environment())
+    parallel::clusterEvalQ(cl, {
+      library(stockassessment, lib.loc = lib.ver)
+    })
+    fits <- parallel::parLapply(cl, pars, function(p) sam.fit(fit$data, fit$conf, p, silent = TRUE, map=map, ...))
+  }
+  else {
+    fits <- lapply(pars, function(p) sam.fit(fit$data, fit$conf, p, silent = TRUE, map=map, ...))
+  }
+  attr(fits, "fit") <- fit
+  attr(fits, "jitflag") <- 1
+  class(fits) <- c("samset")
+  fits
+}
+
+set.seed(seed, sample.kind = "Rounding")
+par <- defpar(fit15$data, fit15$conf)
+par$rec_pars <- fit15$pl$rec_pars
+jitfix <- myjit(fit15, nojit = 10, par=par, map=map15)
+
+# max difference in decreasing order:
+fn1(jitfix)
+```
+
+
+```{r jitfix, echo=FALSE, fig.cap="Jitter Test outputs for 'fit15' when the SRR parameters are fixed.", fig.dim=c(10,10)}
+plot(jitfix)
+```
+
+The jitter test results in very good robustness to initial parameters (Figure \ref{fig:jitfix}).
+
+
+The "simstudy" function does not allow for extra arguments to be passed to the function so it is modified as follows:
+
+```{r, results='markup'}
+mysimstudy <- function (fit, nsim, ncores = detectCores(), map, par, ...) {
+  simdata <- simulate(fit, nsim = nsim, full.data = TRUE)
+  if (ncores > 1) {
+    cl <- parallel::makeCluster(ncores)
+    on.exit(parallel::stopCluster(cl))
+    lib.ver <- dirname(path.package("stockassessment"))
+    parallel::clusterExport(cl, varlist = c("lib.ver", "map", "par"), envir = environment())
+    parallel::clusterEvalQ(cl, {
+      library(stockassessment, lib.loc = lib.ver)
+    })
+    runs <- parallel::parLapply(cl, simdata, function(x) tryCatch(sam.fit(x, fit$conf, par, map=map, ...), error=function(e) NA))
+  }
+  else {
+    runs <- lapply(simdata, function(x) tryCatch(sam.fit(x, fit$conf, par, map=map, ...), error=function(e) NA))
+  }
+  attr(runs, "fit") <- fit
+  class(runs) <- "samset"
+  runs
+}
+set.seed(seed, sample.kind = "Rounding")
+sim15fix <- mysimstudy(fit15, 20, par=par, map=map15)
+pbRun <- which(sapply(sim15fix, function(x) is.na(x[1]))==TRUE)
+sim15fix <- sim15fix[-pbRun]
+class(sim15fix) <- "samset"
+sum(sapply(sim15fix, function(x) x$opt$convergence==0))
+```
+
+```{r sim15fix, echo=FALSE, fig.cap="Simulation study outputs for 'fit15'.", fig.dim=c(10,10)}
+plot(sim15fix)
+```
+
+Here `r sum(sapply(sim15fix, function(x) x$opt$convergence==0))` out of 20 simulations converged, which is acceptable and the results oscillate within the confidence intervals of the model outputs (Figure \ref{fig:sim15fix}).
+
+The above results show that fixing the SRR parameters allow robustness of the model while ensuring the reference points, if fixed between benchmarks, are always consistent with the assessment model.
+
+# Comparison of all outputs for "fitFinal" and "fit15" {#comp}
+
+The AIC for "fitFinal" (`r round(AIC(fitFinal))`) is better than the one of "fit15" (`r round(AIC(fit15))`).
+
+```{r, echo=FALSE}
+tmp1=partable(fitFinal)
+tmp2=partable(fit15)
+colnames(tmp2) <- paste0(colnames(tmp2), "_HS")
+tmp1 <- rbind(tmp1, "rec_pars_0" = NA, "rec_pars_1"=NA)
+nam <- rownames(tmp2)
+all_pars <- cbind(tmp1[nam,],tmp2)
+```
+
+```{r partab, results='markup', echo=FALSE}
+options(scipen = 99)
+kable(all_pars, "latex", booktabs = T, caption = "Parameter table for both fits. HS stands for hockey-stick o the results from 'fit15'", digits = 4) %>%
+kable_styling(latex_options = c("striped", "scale_down"))  
+```
+
+Both model estimate similar values for the parameters they have in common (Table \ref{tab:partab}).
+
+```{r plotfits, echo=FALSE, fig.cap="SSB, Fbar, and recruitment plot for 'fitFinal' with ransom walk (RW) in recruitment and 'fit15' with hockey-stick SRR.", fig.dim=c(10,10)}
+attr(fit15, "col") <- "black"
+attr(fit15, "lty") <- 1
+attr(fitFinal, "col") <- "deepskyblue"
+attr(fitFinal, "lty") <- 2
+fits <- c("HS"=fit15, "RW"=fitFinal)
+plot(fits, addCI=TRUE)
+```
+
+The outputs of both models are very close, main differences are seen for recruitment (Figure \ref{fig:plotfits}).
+
+```{r srplot, echo=FALSE, fig.cap="Stock-recruitment pairs for both fits. Outputs for 'fitFinal' are shown in blue.", fig.dim=c(6,6)}
+srplot(fit15)
+col <- "deepskyblue4"
+srplot(fitFinal, add=TRUE, textcol = col, linecol = col, polycol = do.call("rgb", c(as.list(col2rgb(col)[, 
+        1]), list(alpha = 50), list(maxColorValue = 255))), polyborder = do.call("rgb", 
+        c(as.list(col2rgb(col)[, 1]), list(alpha = 80), list(maxColorValue = 255))))
+
+```
+
+The SSB and recruitment pairs slightly differ between the fits but the trend is similar (Figure \ref{fig:srplot}).
+
+```{r sel, echo=FALSE, fig.cap="Fishing mortality at age.", fig.dim=c(10,6)}
+col <- rep(1:6,fitFinal$data$noYears)
+fl <- 1
+par(mfrow=c(1,2), mar=c(4,4,2,1))
+for (fit4 in c(fitFinal, fit15)){
+matplot(y=t(faytable(fit4, fleet=fl)), x=as.numeric(rownames(t(faytable(fit4, fleet=fl)))), type="l", xlab="Age", ylab="F at age")
+for (i in 1:fit4$data$noYears) text(y=t(faytable(fit4, fleet=fl)[i,]), x=as.numeric(rownames(t(faytable(fit4, fleet=fl)))), labels = fit4$data$years[i], cex = 0.7, col=col[i])
+}
+mtext(c("RW", "HS"), side=3, outer = TRUE, line=-2, at=c(1/4,3/4))
+```
+
+Both models estimate similar fishing mortality at age (Figure \ref{fig:sel}).
+
+
+```{r fitplot1, echo=FALSE, fig.cap="Estimated (line) vs. observed (dot) catch at age (numbers on log scale) for both fits. Outputs for 'fitFinal' are shown in blue.", fig.dim=c(10,10)}
+myfitplot <- function(fits, fleet, log = TRUE, ages=0:8, ...) {
+  trans <- function(x) if (log) log(x) else x
+  obs <- trans(getFleet(fits[[1]], fleet = fleet, pred=FALSE))
+  pred <- lapply(fits, getFleet, fleet = fleet, pred=TRUE)
+  pred <- lapply(pred, trans)
+  for (i in 1:length(fits)){
+    attr(pred[[i]], "col") <- attr(fits[[i]], "col")
+    attr(pred[[i]], "lty") <- attr(fits[[i]], "lty")
+  }
+  for (a in colnames(obs)){
+    plot(obs[,a]~rownames(obs), main=paste0("Age ", a), xlab="", ylab="", ...)
+    lapply(pred, function(x) lines(x[,a]~rownames(x), col=attr(x, "col"), lty=attr(x, "lty"), lwd=2))
+  }
+}
+fl=1
+par(mfrow=c(3,3), mar=c(3,3,2,1), oma=c(0,0,3,0))
+myfitplot(fits, fleet=fl)
+mtext(attr(fitFinal$data, "fleetNames")[fl], side = 3, outer=TRUE)
+```
+
+```{r fitplot2, echo=FALSE, fig.cap="Estimated (line) vs. observed (dot) index at age (thousand on log scale) for both fits. Outputs for 'fitFinal' are shown in blue.", fig.dim=c(10,10)}
+fl=2
+par(mfrow=c(3,2), mar=c(3,3,2,1), oma=c(0,0,3,0))
+myfitplot(fits, fleet=fl)
+mtext(attr(fitFinal$data, "fleetNames")[fl], side = 3, outer=TRUE)
+```
+
+```{r fitplot3, echo=FALSE, fig.cap="Estimated (line) vs. observed (dot) index at age (thousand on log scale) for both fits. Outputs for 'fitFinal' are shown in blue.", fig.dim=c(6,10)}
+fl=3
+par(mfrow=c(3,1), mar=c(3,3,2,1), oma=c(0,0,3,0))
+myfitplot(fits, fleet=fl)
+mtext(attr(fitFinal$data, "fleetNames")[fl], side = 3, outer=TRUE)
+```
+
+```{r fitplot4, echo=FALSE, fig.cap="Estimated (line) vs. observed (dot) index at age (thousand on log scale) for both fits. Outputs for 'fitFinal' are shown in blue.", fig.dim=c(6,6)}
+fl=4
+par(mfrow=c(1,1), mar=c(3,3,2,1), oma=c(0,0,3,0))
+myfitplot(fits, fleet=fl)
+mtext(attr(fitFinal$data, "fleetNames")[fl], side = 3, outer=TRUE)
+```
+
+```{r fitplot5, echo=FALSE, fig.cap="Estimated (line) vs. observed (dot) index at age (thousand on log scale) for both fits. Outputs for 'fitFinal' are shown in blue.", fig.dim=c(6,6)}
+fl=5
+par(mfrow=c(3,1), mar=c(3,3,2,1), oma=c(0,0,3,0))
+myfitplot(fits, fleet=fl)
+mtext(attr(fitFinal$data, "fleetNames")[fl], side = 3, outer=TRUE)
+```
+
+The fit to observations is almost identical between both models (Figures \ref{fig:fitplot1}-\ref{fig:fitplot5}).
+
+```{r sdplot, echo=FALSE, fig.cap="Estimated standard deviation for observations for both fits", fig.dim=c(10,6)}
+par(mfrow=c(1,2))
+sdplot(fitFinal)
+sdplot(fit15)
+mtext(c("RW", "HS"), side=3, outer = TRUE, line=-2, at=c(1/4,3/4))
+```
+
+The weight given to each observation is similar for both fits (Figure \ref{fig:sdplot}).
+
+```{r retros, echo=FALSE, fig.cap="Retrospective patterns for both fits.", fig.dim=c(10,10)}
+retroFinal <- retro(fitFinal, year = 5)
+rhoFinal <- mohn(retroFinal)
+retroFinal10 <- retro(fitFinal, year=10)
+rhoFinal10 <- mohn(retroFinal10)
+
+par(mfrow=c(3,2), mar=c(3,5,2,1))
+ssbplot(retroFinal10, las=0)
+legend("topright", legend=substitute(rho[Mohn](10)==RR~'%'~~~rho[Mohn](5)==RRR~'%', list(RR=round(100*rhoFinal10[2]), RRR=round(100*rhoFinal[2]))), bty="n")
+ssbplot(retro1510fix, las=0)
+legend("topright", legend=substitute(rho[Mohn](10)==RR~'%'~~~rho[Mohn](5)==RRR~'%', list(RR=round(100*rho1510fix[2]), RRR=round(100*rho15fix[2]))), bty="n")
+
+fbarplot(retroFinal10, las=0)
+legend("topright", legend=substitute(rho[Mohn](10)==RR~'%'~~~rho[Mohn](5)==RRR~'%', list(RR=round(100*rhoFinal10[3]), RRR=round(100*rhoFinal[3]))), bty="n")
+fbarplot(retro1510fix, las=0)
+legend("topright", legend=substitute(rho[Mohn](10)==RR~'%'~~~rho[Mohn](5)==RRR~'%', list(RR=round(100*rho1510fix[3]), RRR=round(100*rho15fix[3]))), bty="n")
+
+recplot(retroFinal10, las=0)
+legend("topright", legend=substitute(rho[Mohn](10)==RR~'%'~~~rho[Mohn](5)==RRR~'%', list(RR=round(100*rhoFinal10[1]), RRR=round(100*rhoFinal[1]))), bty="n")
+recplot(retro1510fix, las=0)
+legend("topright", legend=substitute(rho[Mohn](10)==RR~'%'~~~rho[Mohn](5)==RRR~'%', list(RR=round(100*rho1510fix[1]), RRR=round(100*rho15fix[1]))), bty="n")
+
+mtext(c("RW", "HS"), side=3, outer = TRUE, line=-2, at=c(1/4,3/4))
+
+```
+
+The difference in retrospective patterns between the fits is shown in Figure \ref{fig:retros}.
+
+```{r LOs, echo=FALSE, fig.cap="Leave one survey out plot for both fits.", fig.dim=c(10,10)}
+LOFinal <- leaveout(fitFinal)
+par(mfrow=c(3,2), mar=c(3,5,2,1))
+ssbplot(LOFinal, las=0)
+ssbplot(LOfix, las=0)
+
+fbarplot(LOFinal, las=0)
+fbarplot(LOfix, las=0)
+
+recplot(LOFinal, las=0)
+recplot(LOfix, las=0)
+mtext(c("RW", "HS"), side=3, outer = TRUE, line=-2, at=c(1/4,3/4))
+```
+
+The results of the leave one survey out analysis are compared in Figure \ref{fig:LOs}.
+
+```{r jits, echo=FALSE, fig.cap="Jitter Test outputs for both fits.", fig.dim=c(10,10)}
+set.seed(seed, sample.kind = "Rounding")
+jitFinal <- jit(fitFinal, nojit = 10)
+
+par(mfrow=c(3,2), mar=c(3,5,2,1))
+ssbplot(jitFinal, las=0)
+ssbplot(jitfix, las=0)
+
+fbarplot(jitFinal, las=0)
+fbarplot(jitfix, las=0)
+
+recplot(jitFinal, las=0)
+recplot(jitfix, las=0)
+mtext(c("RW", "HS"), side=3, outer = TRUE, line=-2, at=c(1/4,3/4))
+
+```
+
+The results from the jitter test are identical for both fits (Figure \ref{fig:jits}).
+
+```{r sims, echo=FALSE, fig.cap="Simulation study outputs for both fits.", fig.dim=c(10,10)}
+set.seed(seed, sample.kind = "Rounding")
+simFinal <- simstudy(fitFinal, 20)
+
+par(mfrow=c(3,2), mar=c(3,5,2,1))
+ssbplot(simFinal, las=0)
+ssbplot(sim15fix, las=0)
+
+fbarplot(simFinal, las=0)
+fbarplot(sim15fix, las=0)
+
+recplot(simFinal, las=0)
+recplot(sim15fix, las=0)
+mtext(c("RW", "HS"), side=3, outer = TRUE, line=-2, at=c(1/4,3/4))
+
+```
+
+It is difficult to see a difference in the simulation study outputs between both fits (Figure \ref{fig:sims}). For "fitFinal" `r sum(sapply(simFinal, function(x) x$opt$convergence==0))` out of 20 simulations converged, while `r sum(sapply(sim15fix, function(x) x$opt$convergence==0))` simulations converged for "fit15".
+
+
+In conclusion, this WD did not identify differences that were not already shown in "WD_tuning_sf.pdf". The main differences between the fits are the retrospective patterns that are slightly larger when the model has an SRR ("fit15"), and the AIC that is better for "fitFinal".
+
+\clearpage
+
+
+# Comparison with current assessment model
+
+While it is not very relevant because we have changed the natural mortality, the difference in SSB, Fbar (2-5), and recruitment between the new models and the current 2025 assessment model are shown in Figure \ref{fig:plotfitss}. Note that it is the log recruitment that is presented here to avoid scale problems and that the Fbar has been re-calculated for the current assessment so that the range is for ages 2-5 instead of 3-6.
+
+To better compare the outputs, they are also plotted relative to the mean of the estimated values (Figure \ref{fig:plotfitss2}).
+
+
+```{r plotfitss, echo=FALSE, fig.cap="SSB, Fbar, and recruitment plot for the new single fleet models and the current 2025 multifleet assessment model.", fig.dim=c(10,10)}
+fit_orig <- fitfromweb("WBSS_HAWG_2025")
+fit_orig$conf$fbarRange <- c(2,5)
+fit_orig$sdrep$value[which(names(fit_orig$sdrep$value)=="logfbar")] <- log(apply(faytable(fit_orig)[,as.character(2:5)],1,mean))
+fitss <- c("2025 assessment"=fit_orig,"HS"=fit15, "RW"=fitFinal)
+
+par(mfrow=c(3,1), mar=c(3,4,1,1))
+ssbplot(fitss, addCI=TRUE, ylim=c(0, max(ssbtable(fitFinal))))
+fbarplot(fitss, addCI=TRUE, partial=FALSE)
+lab <- paste("Log recruits (age ", fitFinal$conf$minAge, ")", sep = "")
+stockassessment:::plotit(fitss, "logR", addCI=TRUE, trans=function(x) log(x),  ylab = lab, ylim=c(2.5,3))
+```
+
+
+```{r plotfitss2, echo=FALSE, fig.cap="SSB, Fbar, and recruitment relative to the mean of the estimated values across the time-series for the new single fleet models and the current 2025 multifleet assessment model.", fig.dim=c(10,10)}
+tmp_orig <- ssbtable(fit_orig)/apply(ssbtable(fit_orig),2,mean)
+tmpFinal <- ssbtable(fitFinal)/apply(ssbtable(fitFinal),2,mean)
+tmp15 <- ssbtable(fit15)/apply(ssbtable(fit15),2,mean)
+
+colSet <- c("#000000", "#88CCEE", "#44AA99", "#117733", "#999933", 
+        "#DDCC77", "#661100", "#CC6677", "#882255", "#AA4499")
+
+cicol <- paste0(colSet, "80")
+
+par(mfrow=c(3,1), mar=c(3,4,1,1))
+tmp_orig <- ssbtable(fit_orig)/apply(ssbtable(fit_orig),2,mean)["Estimate"]
+tmpFinal <- ssbtable(fitFinal)/apply(ssbtable(fitFinal),2,mean)["Estimate"]
+tmp15 <- ssbtable(fit15)/apply(ssbtable(fit15),2,mean)["Estimate"]
+plot(tmp_orig[,"Estimate"]~rownames(tmp_orig), type="l", ylim=c(0,5), col=colSet[1], lwd=2, ylab="SSB relative to the mean", xlab="")
+polygon(x=c(rownames(tmp_orig), rev(rownames(tmp_orig))), y=c(tmp_orig[,"Low"], rev(tmp_orig[,"High"])), col=rgb(0,0,0,alpha=0.3), border = NA)
+lines(tmp15[,"Estimate"]~rownames(tmp15), col=colSet[2], lwd=2)
+polygon(x=c(rownames(tmp15), rev(rownames(tmp15))), y=c(tmp15[,"Low"], rev(tmp15[,"High"])), col=cicol[2], border = NA)
+lines(tmpFinal[,"Estimate"]~rownames(tmpFinal), col=colSet[3], lwd=2, lty=2)
+polygon(x=c(rownames(tmpFinal), rev(rownames(tmpFinal))), y=c(tmpFinal[,"Low"], rev(tmpFinal[,"High"])), col=cicol[3], border = NA)
+legend("topright", legend=names(fitss), col=colSet, lty=c(1,1,2), bty="n", lwd=2)
+
+tmp_orig <- fbartable(fit_orig)/apply(fbartable(fit_orig),2,mean)["Estimate"]
+tmpFinal <- fbartable(fitFinal)/apply(fbartable(fitFinal),2,mean)["Estimate"]
+tmp15 <- fbartable(fit15)/apply(fbartable(fit15),2,mean)["Estimate"]
+plot(tmp_orig[,"Estimate"]~rownames(tmp_orig), type="l", ylim=c(0,2.5), col=colSet[1], lwd=2, ylab="Fbar relative to the mean", xlab="")
+polygon(x=c(rownames(tmp_orig), rev(rownames(tmp_orig))), y=c(tmp_orig[,"Low"], rev(tmp_orig[,"High"])), col=rgb(0,0,0,alpha=0.3), border = NA)
+lines(tmp15[,"Estimate"]~rownames(tmp15), col=colSet[2], lwd=2)
+polygon(x=c(rownames(tmp15), rev(rownames(tmp15))), y=c(tmp15[,"Low"], rev(tmp15[,"High"])), col=cicol[2], border = NA)
+lines(tmpFinal[,"Estimate"]~rownames(tmpFinal), col=colSet[3], lwd=2, lty=2)
+polygon(x=c(rownames(tmpFinal), rev(rownames(tmpFinal))), y=c(tmpFinal[,"Low"], rev(tmpFinal[,"High"])), col=cicol[3], border = NA)
+
+tmp_orig <- rectable(fit_orig)/apply(rectable(fit_orig),2,mean)["Estimate"]
+tmpFinal <- rectable(fitFinal)/apply(rectable(fitFinal),2,mean)["Estimate"]
+tmp15 <- rectable(fit15)/apply(rectable(fit15),2,mean)["Estimate"]
+plot(tmp_orig[,"Estimate"]~rownames(tmp_orig), type="l", ylim=c(0,3.5), col=colSet[1], lwd=2, ylab="Recruitment relative to the mean", xlab="")
+polygon(x=c(rownames(tmp_orig), rev(rownames(tmp_orig))), y=c(tmp_orig[,"Low"], rev(tmp_orig[,"High"])), col=rgb(0,0,0,alpha=0.3), border = NA)
+lines(tmp15[,"Estimate"]~rownames(tmp15), col=colSet[2], lwd=2)
+polygon(x=c(rownames(tmp15), rev(rownames(tmp15))), y=c(tmp15[,"Low"], rev(tmp15[,"High"])), col=cicol[2], border = NA)
+lines(tmpFinal[,"Estimate"]~rownames(tmpFinal), col=colSet[3], lwd=2, lty=2)
+polygon(x=c(rownames(tmpFinal), rev(rownames(tmpFinal))), y=c(tmpFinal[,"Low"], rev(tmpFinal[,"High"])), col=cicol[3], border = NA)
+
+```
+
+
+
+\clearpage
+
+# References
