@@ -56,7 +56,7 @@ prop <- caton/apply(caton,1,sum)
 prop2 <- rbind(prop, "Mean"=apply(prop,2,mean))
 ```
 
-```{r prop, echo=FALSE}
+```{r prop, results='markup', echo=FALSE}
 kable(round(prop2*100), "latex", booktabs = T, caption = "Proportion of catch in weight per age.") %>%
 kable_styling(latex_options = c("striped"))  
 ```
