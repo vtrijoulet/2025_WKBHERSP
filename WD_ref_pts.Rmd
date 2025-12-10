@@ -1,0 +1,696 @@
+---
+title: "Working document: Reference points estimation for WBSS herring"
+author: Vanessa Trijoulet and Christoffer Moesgaard Albertsen
+output:
+  bookdown::pdf_document2: default
+bibliography: refs.bib
+date: "`r format(Sys.Date(), '%d %B %Y')`"
+header-includes:
+  - \usepackage{pdflscape}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE,
+	cache = TRUE,
+	results = "hide",
+	tidy = TRUE,
+	tidy.opts = list(width.cutoff = I(90))
+)
+
+library(stockassessment)
+library(knitr)
+library(kableExtra)
+# remotes::install_github("fishfollower/SAM/stockassessment", ref="F_TAC")
+load("results/fits15_sf.RData")
+load("results/refpts1.RData")
+load("results/B0_nosim=10000.RData")
+load("results/BMSY_nosim=10000.RData")
+load("results/stochamsy_hcr_nosim=10000.RData")
+fit <- stockassessment:::refit(fit15)
+options(scipen=99999)
+```
+
+This WD describes the steps taken to estimate reference points for WBSS herring. We estimated the reference points internally in SAM using stochastic simulations and following the current ICES guidelines regarding reference points estimation proposed in WKNEWREF [@ICES2024WKNEWREF]. Please note that, given the fact that this is the first time this method is used in ICES, some tests were also made in EqSim and gave similar outputs. Those are not presented in this WD.
+
+To allow the estimation of reference points internally in SAM, "fit15" from WD_tuning_sf.pdf was chosen as final assessment model as the outputs and its performance are similar as for "fitFinal" (see WD_extra_sf.pdf). As a result the stock-recruitment relationship parameters will be fixed in future assessment updates to avoid convergence problems and keep the reference points constant and consistent with the assessment model until the next benchmark.
+
+# Choose the arguments to use for reference point estimation
+
+The group agreed to use the following arguments for the estimation:
+
+- resampleFirst=TRUE, i.e., the uncertainty in the current perception of the stock is explicitly considered
+
+- bio.years=2015-2024, only relevant for weight at age because maturity ogive and natural mortality are time-invariant. Ten years are used here because a more recent period (e.g., 5 years) might be contaminated by larger NSAS herring. Indeed the weight are calculated before the catch is split into stocks. Since 2019, most of the catch is taken in the North Sea, so the weights might be larger due to more larger NSAS herring in the catch.
+
+- sel.years=2020-2024, i.e, to reflect recent selectivity patterns
+
+- deterministicF=FALSE, i.e., creates error around advised F so that realized F is different (calculated from estimated F process in the assessment by default)
+
+- processNoiseF=FALSE, i.e., default, error around F process is turned off
+
+- fixedFdeviation=FALSE, i.e., default, difference between realized F and advised F is not constant over time
+
+- equilibrium method =”ES”, i.e., simulation-based reference points 
+
+
+# Estimate the initial F~MSY~
+
+We first estimated F~MSY~ without the use of the ICES advice rule (AR). To do so, we did it in two steps described below.
+
+## Run a quick simulation to get adequate F range
+
+We first run the "stochasticReferencepoints" function using a wide F range (0-0.5) and 500 simulations, as follows:
+
+```{r, eval=FALSE}
+remotes::install_github("fishfollower/SAM/stockassessment", ref="F_TAC")
+fit <- stockassessment:::refit(fit15)
+seed <- 164312 
+stochamsy <- stochasticReferencepoints(fit, 
+                                       referencepoints = c("MSY", "0.2B0"), 
+                                       nosim=500, 
+                                       nosim_ci=0, 
+                                       Frange=c(0,0.5), 
+                                       nYears=100,
+                                       knots=5,
+                                       seed=seed,
+                                       aveYears=2015:2024,
+                                       selYears=2020:2024,
+                                       deterministicF=FALSE,
+                                       resampleFirst=TRUE,
+                                       ntail=10,
+                                       equilibriumMethod = "ES")
+```
+
+We now check yield curve and see that we can reduce the F range to 0-0.15 to maximize the number of iterations around F~MSY~ (Figure \ref{fig:yield}).
+
+```{r yield, echo=FALSE, fig.cap="Equilibrium yield curve for 'stochamsy'", fig.dim=c(6,6)}
+plot(stochamsy$graphs$Yield~stochamsy$graphs$F, ylab="Yield", xlab="F", pch=16, col=rgb(0,0,0, 0.3))
+lines(stochamsy$regression[[1]][,2]~stochamsy$regression[[1]][,1], col="red", lwd=2)
+```
+
+
+## Run with more precise F range and more iterations
+
+We now estimate F~MSY~ using a more precise F range (0-0.15) and 10,000 simulations for two different seeds to check the sensitivity of the results.
+
+```{r, eval=FALSE}
+stochamsy4 <- stochasticReferencepoints(fit, 
+                                        referencepoints = c("MSY", "0.2B0"), 
+                                        nosim=10000, 
+                                        nosim_ci=0, 
+                                        Frange=c(0,0.15), 
+                                        nYears=100,
+                                        knots=10,
+                                        seed=seed,
+                                        aveYears=2015:2024,
+                                        selYears=2020:2024,
+                                        deterministicF=FALSE,
+                                        resampleFirst=TRUE,
+                                        ntail=10,
+                                        equilibriumMethod = "ES",
+                                        ncores=4
+)
+
+stochamsy4b <- stochasticReferencepoints(fit, 
+                                        referencepoints = c("MSY", "0.2B0"), 
+                                        nosim=10000, 
+                                        nosim_ci=0, 
+                                        Frange=c(0,0.15), 
+                                        nYears=100,
+                                        knots=10,
+                                        seed=seed+1, # change of seed
+                                        aveYears=2015:2024,
+                                        selYears=2020:2024,
+                                        deterministicF=FALSE,
+                                        resampleFirst=TRUE,
+                                        ntail=10,
+                                        equilibriumMethod = "ES",
+                                        ncores=4
+)
+
+```
+
+Despite a large number of simulations the results are slightly sensitive to the seed used (Figure \ref{fig:yieldfinal}). The resulting reference points are given in Table \ref{tab:refpts}. 
+
+
+```{r yieldfinal, echo=FALSE, fig.cap="Equilibrium yield curve for two estimations of reference points using different seeds. The red lines show the MSY spline curve for 'stochamsy4' and its corresponding F~MSY~ (seed). The blue lines shows the MSY spline curve for 'stochamsy4b' and its corresponding F~MSY~ (seed+1).", fig.dim=c(10,6)}
+par(mfrow=c(1,2))
+
+plot(stochamsy4$graphs$Yield~stochamsy4$graphs$F, ylab="Yield", xlab="F", main="seed", pch=16, col=rgb(0,0,0, 0.3))
+lines(stochamsy4$regression[[1]][,2]~stochamsy4$regression[[1]][,1], col="red", lwd=2)
+lines(stochamsy4b$regression[[1]][,2]~stochamsy4b$regression[[1]][,1], col="blue", lwd=2)
+abline(v=stochamsy4$tables$F[1,1], col="red", lwd=2)
+abline(v=stochamsy4b$tables$F[1,1], col="blue", lwd=2)
+
+plot(stochamsy4b$graphs$Yield~stochamsy4b$graphs$F, ylab="Yield", xlab="F", main="seed + 1", pch=16, col=rgb(0,0,0, 0.3))
+lines(stochamsy4$regression[[1]][,2]~stochamsy4$regression[[1]][,1], col="red", lwd=2)
+lines(stochamsy4b$regression[[1]][,2]~stochamsy4b$regression[[1]][,1], col="blue", lwd=2)
+abline(v=stochamsy4$tables$F[1,1], col="red", lwd=2)
+abline(v=stochamsy4b$tables$F[1,1], col="blue", lwd=2)
+
+```
+
+
+```{r refpts, echo=FALSE, results='markup'}
+Fmsy <- rbind(stochamsy4$tables$F[1,1],stochamsy4b$tables$F[1,1])
+Bmsy <- rbind((stochamsy4$tables$Biomass[1,1]),(stochamsy4b$tables$Biomass[1,1]))
+refpts <- cbind(Fmsy, Bmsy)
+refpts <- rbind(refpts, c(0,0))
+refpts[3,1] <- (refpts[1,1]/refpts[2,1])
+refpts[3,2] <- round(refpts[1,2]/refpts[2,2],5)
+
+refpts[,1] <- format(refpts[,1], format='d', digits = 4)
+refpts[1:2,2] <- c(format(stochamsy4$tables$Biomass[1,1],format='d',big.mark=" ", digits=1),format(stochamsy4b$tables$Biomass[1,1],format='d',big.mark=" ", digits=1))
+refpts[3,2] <- format(refpts[3,2], format='d', digits = 4)
+
+
+rownames(refpts) <- c("seed", "seed + 1", "Difference")
+colnames(refpts) <- c("$F_{\\mathrm{MSY}}$", "$B_{\\mathrm{MSY}}$")
+
+kable(refpts, format = "latex", booktabs = TRUE, escape=FALSE, caption = "Reference points for 10,000 simulations and two different seeds.") %>%
+  kable_styling(latex_options = c("striped"))
+```
+
+The F~MSY~ values are also sensitive to the number of knots used in the spline. Here 10 knots were used and were found to be the best fit to the points based on AIC. Figure \ref{fig:spline} shows how the results can vary with the number of knots used in the spline.
+
+```{r spline, echo=FALSE, fig.cap="Equilibrium yield curve for two estimations of reference points using different seeds and knot numbers for the MSY spline. The left panel is for 'stochamsy4' and the right panel is for 'stochamsy4b'.", fig.dim=c(10,6)}
+
+cols <- c("#990000", # Red
+          "#79238E", #Purple
+          "#FC7634", #Orange
+          "#2F3EEA", #Blue
+          "#F6D04D", #Yellow
+          "#000000", #Black
+          "#008835", #Green
+          "#030F4F", #Navy
+          "#E83F48", #Red2
+          "#F7BBB1", #Pink
+          "#1FD082", #Bright green          
+          "#DADADA"  #Grey
+          
+)
+
+## Fit different number of knots
+knots_fn <- function(stochamsy){
+    ## Fit different number of knots
+    knt <- 3:13
+    nKnots <- lapply(knt, function(k){
+    Fvals <- stochamsy$graphs$F
+    Crit <- stochamsy$graphs$Yield
+    cutoff <- 0
+    cutfun <- function(x) x > max(x) * cutoff
+    MT <- stockassessment:::.refpointSMethodParser("Median", formula = NA, derivedSummarizer = NA, 
+                                                   positive = TRUE)
+    MT$monotone <- "n"
+    MT$formula <- ~ibc(F, k)
+    Frng <- range(Fvals[cutfun(Crit)])
+    inRng <- function(x, rng) x > rng[1] & x < rng[2]
+    indx <- inRng(Fvals, Frng)    
+    scf <- stockassessment:::.refpointSCurveFit(Fvals[indx],Crit[indx], MT)
+    fseq <- seq(Frng[1],Frng[2],len=200)
+    a <- stockassessment:::predict.rpscurvefit(scf,fseq)
+    r <- cbind(fseq,a)
+    logLik <- length(Fvals[indx])*(log(0.5*(1-0.5)) - 1 - log(scf$objective/length(Fvals[indx])))
+    attr(r,"AIC") <- -2 * logLik  + 2 * length(scf$par)
+    r
+  })
+  cbind(knt,sapply(nKnots,attr,which="AIC"))
+  return(nKnots)
+}
+
+col <-cols
+test <- knots_fn(stochamsy4)
+testb <- knots_fn(stochamsy4b)
+
+par(mfrow=c(1,2))
+plot(stochamsy4$graphs$Yield~stochamsy4$graphs$F, ylab="Yield", xlab="F", main="seed", pch=16, col=rgb(0,0,0, 0.3))
+#lapply(test, function(x) lines(x[,2]~x[,1], col=1:20, lwd=2))
+for (i in 1:length(test)){
+  lines(test[[i]][,2]~test[[i]][,1], col=i, lwd=2)
+  abline(v=test[[i]][which(test[[i]][,2]==max(test[[i]][,2])),1], col=col[i])
+}
+legend("topleft", legend=3:13, lty = 1, bty="n", col=col, ncol = 3, cex=0.6)
+
+plot(stochamsy4b$graphs$Yield~stochamsy4b$graphs$F, ylab="Yield", xlab="F", main="seed + 1", pch=16, col=rgb(0,0,0, 0.3))
+#lapply(test, function(x) lines(x[,2]~x[,1], col=1:20, lwd=2))
+for (i in 1:length(testb)){
+  lines(testb[[i]][,2]~testb[[i]][,1], col=i, lwd=2)
+  abline(v=testb[[i]][which(testb[[i]][,2]==max(testb[[i]][,2])),1], col=col[i])
+}
+legend("topleft", legend=3:13, lty = 1, bty="n", col=col, ncol = 3, cex=0.6)
+
+```
+
+
+```{r, echo=FALSE}
+FMSY <- 0.07 # chosen by group
+```
+
+Overall the difference in F~MSY~ is small. Additional runs with 5,000 iterations (not presented here) gave also similar values.
+
+The group chose to use a F~MSY~ of `r icesAdvice::icesRound(FMSY)` given the uncertainty in the second significant digit due to simulation variability.
+
+
+# Estimate B~lim~ and MSY B~trigger~
+
+## B~lim~
+
+### Stock type
+
+According to the ICES guidelines, the stock type could be a Type 2 or 3 (Figure \ref{fig:sr}). It is possible to estimate a segmented regression as it was estimated in the SAM model but this means that, if we were to use stock Type 2, B~lim~ will be close the B~MSY~. In addition, there are large recruitment values below the inflection point estimated in SAM so it does not seem relevant to use Type 2 to estimate B~lim~ for this stock. Type 3 would lead to B~lim~ at B~loss~ which was rejected for the same above reasons.
+
+```{r sr, echo=FALSE, fig.cap="Stock-recruitment pairs for the new assessment model.", fig.dim=c(6,6)}
+srplot(fit)
+```
+
+Despite the stock not being a Type 5, we did try to estimate the empirical B~lim~ and we also looked at fraction of B~0~ and B~MSY~ taken from the literature. This is described below.
+
+
+### Empirical B~lim~ (B~emp~)
+
+According to @ICES2024WKNEWREF, the empirical B~lim~ corresponds to the average of the lowest k SSB estimates that resulted in above median recruitment. We therefore estimated it as follows:
+
+```{r}
+med_rec <- apply(rectable(fit),2,median)[1]
+
+s <- ssbtable(fit)[,1]
+r <- rectable(fit)[,1]
+data <- data.frame(Rec=r, SSB=s, row.names=rownames(ssbtable(fit)))
+data$above_med_rec <- data$Rec>med_rec
+data$year <- as.numeric(rownames(ssbtable(fit)))
+
+pairs <- data[which(data$above_med_rec==TRUE),] 
+```
+
+Table \ref{tab:medRec} shows the values above median recruitment ordered by increasing SSB.
+
+```{r medRec, echo=FALSE, results='markup'}
+kable(pairs[order(pairs[, "SSB"]),c("Rec", "SSB")], format = "latex", booktabs = TRUE, caption = "Recruitment and SSB pairs, where recruitment is above median recruitment.", digit=0) %>%
+  kable_styling(latex_options = c("striped"))
+```
+
+```{r srMEd, echo=FALSE, fig.cap="SSB and recruitment pairs and median recruitment (dashed line).", fig.dim=c(6,6)}
+srplot(fit)
+abline(h=med_rec, lwd=2, lty=2)
+```
+
+We see in Figure \ref{fig:srMEd} that recruitment for the years 2010 and 2013 (first two values) are not significantly above median recruitment. As a result, B~emp~ is estimated ignoring the first two pairs, as follows:
+
+```{r}
+# remove 1st 2 years not significantly above median recruitment:
+tmp2 <- pairs[order(pairs[, "SSB"]),][-c(1,2),] 
+Bemperical_k <- c(round(mean(tmp2[order(tmp2[, "SSB"]),][1,"SSB"])),  
+                  round(mean(tmp2[order(tmp2[, "SSB"]),][1:2,"SSB"])),    
+                  round(mean(tmp2[order(tmp2[, "SSB"]),][1:3,"SSB"])))  
+
+names(Bemperical_k) <- c("k=1", "k=2", "k=3")
+
+```
+
+```{r emperical, echo=FALSE, results='markup'}
+kable(rbind("Bemp"=Bemperical_k), format = "latex", booktabs = TRUE, caption = "Emperical biomass for different number of SSB estimates to average across (k), in tonnes.") %>%
+  kable_styling(latex_options = c("striped"))
+```
+
+
+The resulting values for k=1-3 are given in Table \ref{tab:emperical}. The group favored the value for k=3.
+
+```{r}
+Bempirical <- Bemperical_k["k=3"]
+```
+
+
+### Fraction of B~0~ or B~MSY~
+
+The unfished biomass (B~0~) was obtained by running a simulation with F=0 and 10,000 simulations but removing the error between advised F and realized F ("deterministicF=TRUE") as follows:
+
+```{r, eval=FALSE}
+# forecast with same arguments as reference points but without the error on F
+set.seed(seed)
+B0run <- modelforecast(fit, 
+                       constraint = rep("F=0.000000001", 100),
+                       nosim=10000, 
+                       aveYears=2015:2024,
+                       selYears=2020:2024,
+                       deterministicF=TRUE, ### !!!!!
+                       resampleFirst=TRUE,
+                       ncores=1,
+                       returnAllYears = FALSE,
+                       fastFixedF = TRUE 
+)
+```
+
+```{r}
+tmp <- c() 
+for (i in rev(length(B0run)+c(0:-9))){
+  tmp <- c(tmp, as.numeric(median(B0run[[i]]$ssb)))
+}
+B0_final <- mean(tmp)
+```
+
+
+The resulting dynamics is shown in Figure \ref{fig:B0}. The resulting B~0~ is of `r formatC(round(B0_final),format='d',big.mark=" ")` t.
+
+```{r B0, echo=FALSE, fig.cap="Equilibrium run for F=0.", fig.dim=c(10,10)}
+plot(B0run)
+```
+
+The different fractions of B~0~ found in the literature are (likely a non-exhaustive list):
+
+- 0.35.B~0~ for *Clupeidae* in @ICES2024WKNEWREF, but obtained from fitting a segmented regression
+
+- 0.2.B~0~ [@dichmont2016]
+
+- 0.1-0.2.B~0~ [@preece2011]
+
+
+These values are given below:
+
+```{r, results='markup'}
+round(0.35*B0_final)
+round(0.2*B0_final)
+round(0.1*B0_final)
+```
+
+
+A more precise value for B~MSY~ was obtained by running a simulation with F=F~MSY~, as follows:
+
+```{r, eval=FALSE}
+# forecast with same arguments as reference points for F=FMSY
+set.seed(seed)
+BMSYrun <- modelforecast(fit, 
+                         constraint = rep("F=0.07", 100),
+                         nosim=10000, 
+                         aveYears=2015:2024,
+                         selYears=2020:2024,
+                         deterministicF=FALSE, ### !!!!!
+                         resampleFirst=TRUE,
+                         ncores=1,
+                         returnAllYears = FALSE,
+                         fastFixedF = TRUE 
+)
+```
+
+```{r}
+tmp1 <- c()
+for (i in rev(length(BMSYrun)+c(0:-9))){
+  tmp1 <- c(tmp1, as.numeric(median(BMSYrun[[i]]$ssb)))
+}
+BMSY <- mean(tmp1)
+```
+
+
+```{r BMSY, echo=FALSE, fig.cap="Equilibrium run for F=FMSY.", fig.dim=c(10,10)}
+plot(BMSYrun)
+```
+
+The resulting B~MSY~ is of `r formatC(round(BMSY),format='d',big.mark=" ")` t.
+
+
+The different fractions of B~MSY~ found in the literature are (likely a non-exhaustive list):
+
+- 0.3.B~MSY~ used in SPiCT
+
+- 0.4.B~MSY~ used in DFO, Canada by default, see also @walter2022
+
+- 0.5.B~MSY~ used in USA by default
+
+- 0.45.B~MSY~ is estimated to be the maximum recruitment productivity for *Clupeidae* stocks, i.e., the point where the recruits per spawners start to decline as SSB declines when there are Allee effects [@albertsen2025]
+
+
+These values are given below:
+
+```{r, results='markup'}
+round(0.3*BMSY)
+round(0.4*BMSY)
+round(0.5*BMSY)
+round(0.45*BMSY) 
+```
+
+
+All values are presented on top of the stock-recruitment relationship and the B0 run in Figure \ref{fig:allBlim}. In addition, for illustration, Table \ref{tab:prob} shows the first year in the F=0 projection that would lead to $P(SSB < B_{lim}) \leq{5}\%$.
+
+
+```{r allBlim, echo=FALSE, fig.cap="All B~lim~ possibilities shown on the stock-recruitment relationship and SSB projections for F=0.", fig.dim=c(10,6)}
+par(mfrow=c(1,2))
+srplot(fit)
+abline(v=round(0.35*B0_final), col=cols[1], lwd=2)
+abline(v=round(0.2*B0_final), col=cols[2], lwd=2)
+abline(v=round(0.3*BMSY), col=cols[3], lwd=2)
+abline(v=round(0.4*BMSY), col=cols[4], lwd=2)
+abline(v=round(0.5*BMSY), col=cols[5], lwd=2)
+abline(v=round(0.45*BMSY), col=cols[6], lwd=2)
+abline(v=round(Bempirical), col=cols[7], lwd=2)
+legend("topright", legend=c("0.35*B0", "0.2*B0", "0.3*BMSY", "0.4*BMSY","0.5*BMSY", "0.45*BMSY", "Bemp"), col=cols, lwd=2, lty=1, bty="n", cex=0.6)
+
+ssbplot(B0run)
+legend("topleft", legend=c("0.35*B0", "0.2*B0", "0.3*BMSY", "0.4*BMSY","0.5*BMSY", "0.45*BMSY", "Bemp"), col=cols, lwd=2, lty=1, bty="n", cex=0.6)
+abline(h=round(0.35*B0_final), col=cols[1], lwd=2)
+abline(h=round(0.2*B0_final), col=cols[2], lwd=2)
+abline(h=round(0.3*BMSY), col=cols[3], lwd=2)
+abline(h=round(0.4*BMSY), col=cols[4], lwd=2)
+abline(h=round(0.5*BMSY), col=cols[5], lwd=2)
+abline(h=round(0.45*BMSY), col=cols[6], lwd=2)
+abline(h=round(Bempirical), col=cols[7], lwd=2)
+```
+
+
+```{r}
+rebuild_yr <- c()
+for (i in c(0.35*B0_final, 0.2*B0_final, 0.3*BMSY, 0.4*BMSY, 0.5*BMSY, 0.45*BMSY, Bempirical)){
+  Blim <- i
+  yrs <- c(2024:2124)
+  rebuild_yr <- c(rebuild_yr, yrs[which(sapply(B0run,function(x) mean(x$ssb > Blim))==1)[1]])
+}
+names(rebuild_yr) <- c("0.35*B0", "0.2*B0", "0.3*BMSY", "0.4*BMSY","0.5*BMSY", "0.45*BMSY", "Bemp")
+
+
+rebuild_yr_5pct <- c()
+for (i in c(0.35*B0_final, 0.2*B0_final, 0.3*BMSY, 0.4*BMSY, 0.5*BMSY, 0.45*BMSY, Bempirical)){
+  Blim <- i
+  yrs <- c(2024:2124)
+  rebuild_yr_5pct <- c(rebuild_yr_5pct, yrs[which(sapply(B0run,function(x) mean(x$ssb >= Blim))>0.95)[1]])
+}
+names(rebuild_yr_5pct) <- c("0.35*B0", "0.2*B0", "0.3*BMSY", "0.4*BMSY","0.5*BMSY", "0.45*BMSY", "Bemp")
+
+
+```
+
+
+```{r prob, echo=FALSE, results='markup'}
+kable(rbind("Rebuilding year"=rebuild_yr_5pct), format = "latex", booktabs = TRUE, caption = "First year in the projection with F=0 where the probability of SSB falling below Blim is less than 5\\%.") %>%
+  kable_styling(latex_options = c("striped"))
+```
+
+The group favored the B~emp~ value rather than any fraction of B~0~ or B~MSY~ as the B~lim~ for this stock. The argument was that recruitment is still visually improving above all the other potential values. According to ICES guidelines, B~lim~ is the "biomass limit below which a stock is considered to have reduced reproductive capacity", only B~emp~ satisfies this definition. Using the option of 0.45.B~MSY~, i.e., maximum productivity obtained from a meta-analysis on *Clupeidae* [@albertsen2025] could have also fit the definition of impaired recruitment but is less in line with ICES current methods of estimating B~lim~, and some people at the benchmark were uncomfortable in using a fraction obtained from a meta-analysis as this fraction might not be relevant to this specific stock. As a result B~emp~ value was chosen as B~lim~ by the group. Note that the stock assessor favored a lower B~lim~ value (i.e., 0.45.B~MSY~).
+
+
+## MSY B~trigger~
+
+Different values below were estimated as potential MSY B~trigger~. The last two are the ones following the current ICES guidelines [@ICES2024WKNEWREF].
+
+
+### Fractions of B~MSY~
+
+In the literature, MSY B~trigger~ is sometimes estimated as a fraction of B~MSY~. Here, we investigated two fractions: $0.5.B_{MSY}$ as used in SPiCT, and $0.8.B_{MSY}$ as used by default in DFO, Canada. These would lead to values of `r formatC(round(0.5*BMSY),format='d',big.mark=" ")` t and `r formatC(round(0.8*BMSY),format='d',big.mark=" ")` t, respectively. The first value is smaller than the chosen B~lim~, so cannot be used. The second value could be considered if larger than B~pa~. 
+
+
+### 5^th^ percentile of SSB at F=F~MSY~
+
+```{r}
+low_bmsy <- c()
+up_bmsy <- c()
+for (i in rev(length(BMSYrun)+c(0:-9))){
+  low_bmsy <- c(low_bmsy, as.numeric(quantile(BMSYrun[[i]]$ssb, probs=0.05)))
+  up_bmsy <- c(up_bmsy, as.numeric(quantile(BMSYrun[[i]]$ssb, probs=0.95)))
+}
+BMSY_low <- mean(low_bmsy)
+BMSY_up <- mean(up_bmsy)
+```
+
+According to our above estimated B~MSY~ reference point, the 5^th^ percentile of SSB at F=F~MSY~ is `r formatC(round(BMSY_low),format='d',big.mark=" ")` t, which is below the current chosen B~lim~, so cannot be used as MSY B~trigger~.
+
+
+### B~PA~ 
+
+In ICES, B~PA~ is estimated as $B_{lim}e^{1.645.\sigma}$ with $\sigma=0.2$, or $\sigma$ estimated from the assessment model.
+
+```{r}
+sdState<-function(fit, y=max(fit$data$years)-1:0){
+  idx <- names(fit$sdrep$value) == "logR"
+  sdLogR<-fit$sdrep$sd[idx][fit$data$years%in%y]
+  idx <- names(fit$sdrep$value) == "logssb"
+  sdLogSSB<-fit$sdrep$sd[idx][fit$data$years%in%y]
+  idx <- names(fit$sdrep$value) == "logfbar"
+  sdLogF<-fit$sdrep$sd[idx][fit$data$years%in%y]
+  ret<-cbind(sdLogR, sdLogSSB, sdLogF)
+  rownames(ret)<-y
+  colnames(ret)<-c("sd(log(R))", "sd(log(SSB))", "sd(log(Fbar))")
+  return(ret)
+}
+sdtab <- sdState(fit)
+
+fn_sd <- function(Blim, sd) Blim*exp(1.645*sd)
+Bpa_default <- fn_sd(Bempirical,0.2)
+Bpa_sam <- fn_sd(Bempirical,sdtab["2024", "sd(log(SSB))"])
+```
+
+B~PA~ estimated with the default $\sigma$ value is `r formatC(round(Bpa_default),format='d',big.mark=" ")` t, and B~PA~ estimated with the assessment standard deviation in 2024 ($\sigma=`r sdtab["2024", "sd(log(SSB))"]`$) is `r formatC(round(Bpa_sam),format='d',big.mark=" ")` t. Both values are larger than the value obtained with $0.8.B_{MSY}$, so this latter cannot be used for MSY B~trigger~.
+
+The stock has in the past suffered from having B~lim~ too close to MSY B~trigger~. As a result the group chose to use the largest value for MSY B~trigger~ , i.e., `r formatC(round(Bpa_default),format='d',big.mark=" ")` t.
+
+```{r}
+MSYBtrigger <- Bpa <- Bpa_default
+```
+
+
+
+# Estimate F~PA~
+
+To estimate F~PA~, we use the same function as for F~MSY~, but we now use the ICES AR with the new chosen MSY B~trigger~ (`r formatC(round(MSYBtrigger),format='d',big.mark=" ")` t), including a two year management lag to reflect the current ICES short-term forecast procedure, as recommended by @ICES2024WKNEWREF. The F~target~ follows this the current method used in the short-term forecast (i.e., $F_y=F_{MSY}*SSB_{y-1}/MSY B_{trigger}$). This can be coded as follows:
+
+
+```{r, eval=FALSE}
+stochamsy_hcr <- stochasticReferencepoints(fit,
+                                           constraint="HCR=%f~309861SSB-1",
+                                           useManagementLag=TRUE,
+                                           method="Q0.05",
+                                           referencepoints = c("MSY", "0.2B0"), 
+                                           nosim=10000, 
+                                           nosim_ci=0, 
+                                           Frange=c(0,0.15), 
+                                           nYears=100,
+                                           knots=10,
+                                           seed=seed,
+                                           aveYears=2015:2024,
+                                           selYears=2020:2024,
+                                           deterministicF=FALSE,
+                                           resampleFirst=TRUE,
+                                           ntail=10,
+                                           equilibriumMethod = "ES"
+)
+```
+
+F~PA~ is then obtained by estimated the F~target~ for which the $P(SSB < B~lim~) = 5\%$. This can be approximated by looking where the 5^th^ percentile of SSB crosses B~lim~ (Figure \ref{fig:SSBhcr}). Note the regression method change in the function from "median" (default) to "Q0.05" to allow for the estimating the 5^th^ percentile of SSB.
+
+```{r Fpa}
+# stochamsy_hcr$regression[[2]] is the curve for the 5% quantile of SSB when fishing at the different Fs.
+i<-which.min(abs(stochamsy_hcr$regression[[2]][,2]-Blim))
+Fpa <- stochamsy_hcr$regression[[2]][i,1]
+```
+
+```{r SSBhcr, fig.cap = "SSB values obtained in the reference point simulations including ICES AR and lag in management. The red line shows the 5th percentile regression and the black horizontal line shows Blim.", fig.dim=c(6,6)}
+plot(stochamsy_hcr$graphs$Biomass~stochamsy_hcr$graphs$F, ylab="SSB", xlab="F target", pch=16, col=rgb(0,0,0, 0.3))
+lines(stochamsy_hcr$regression[[2]][,2]~stochamsy_hcr$regression[[2]][,1], col="red", lwd=2)
+abline(h=Blim, lwd=2) 
+```
+
+The resulting F~pa~ is `r Fpa`. 
+
+```{r}
+Fpa <- 0.05 # only 1 significant digit as FMSY
+FMSY_final <- min(FMSY, Fpa) 
+```
+
+For the same reasons as for the initial F~MSY~, the F~PA~ value is rounded to only one significant digit due to simulation variability. Because F~PA~ is lower than F~MSY~, F~MSY~ is then capped at `r icesAdvice::icesRound(FMSY_final)`. This value was validated by a grid search made in parallel and not presented here.
+
+
+
+# Final reference points
+
+The final reference points and their basis are given in Table \ref{tab:tabFinal}.
+
+```{r tabFinal, echo=FALSE, results='markup'}
+tabRefPts <- matrix(nrow=5, ncol=4)
+tabRefPts[,1] <- c(rep("Maximum sustainable yield (MSY) approach",2), rep("Precautionary approach", 3))
+tabRefPts[,2] <- c("$MSY B_{\\text{trigger}}$",
+                    "$F_{\\mathrm{MSY}}$",
+                    "$B_{\\mathrm{lim}}$",
+                    "$B_{\\mathrm{PA}}$",
+                    "$F_{\\mathrm{PA}}$")
+tabRefPts[,3] <- (c(formatC(round(MSYBtrigger),format='d',big.mark=" "), icesAdvice::icesRound(FMSY_final), formatC(round(Blim),format='d',big.mark=" "), formatC(round(Bpa),format='d',big.mark=" "), icesAdvice::icesRound(Fpa)))
+tabRefPts[, 4] <- c("$B_{\\mathrm{PA}}$; in tonnes",
+                    "Stochastic simulations (SAM) with segmented regression. Capped at $F_{\\mathrm{PA}}$.",
+                    "Empirical $B_{\\mathrm{lim}}$, mean of the three lowest SSB values (1996, 1998, 1999) significantly above median recruitment; in tonnes",
+                    "$B_{\\mathrm{lim}} \\, \\times \\, \\exp\\big(1.645 \\, \\times \\, \\sigma\\big),\\; \\sigma = 0.2$; in tonnes.",
+                    "$F_{p05}$; the F that leads to SSB $\\geq$ $B_{\\mathrm{lim}}$ with 95\\% probability"
+)
+colnames(tabRefPts) <- c("Framework", "Reference point", "Value", "Technical basis")
+
+kable(tabRefPts,
+     format = "latex",
+     booktabs = TRUE,
+     escape = FALSE,  # allow LaTeX math to render
+     caption = "Final reference points for WBSS herring.") %>%
+  kable_styling(latex_options = c("striped")) %>%
+  column_spec(1, width = "2.5cm") %>%
+  column_spec(4, width = "9cm")
+  #landscape()   
+```
+
+
+# Comparison with 2025 assessment model and reference points
+
+We now compare the new stock outputs and reference points to the ones used in the 2025 advice. For the old value of B~MSY~, we used the inflection point of segmented regression used reported in @ICES2018wkpela because the B~MSY~ was not reported. It will not be exactly that because three stock-recruitment curves were used for estimation of the MSY reference points. However, the segmented regression was used in 97\% of cases so it should be close enough.
+
+
+```{r}
+Fmsy_old <- 0.31
+Bmsy_old <- 217000 # inflection point of segmented regression 
+Blim_old <- 120000
+
+fit_old <- fitfromweb("WBSS_HAWG_2025")
+
+relF_old <- fbartable(fit_old)[,"Estimate"]/Fmsy_old
+relF <- fbartable(fit)[,"Estimate"]/FMSY_final
+
+relB_old <- ssbtable(fit_old)[,"Estimate"]/Bmsy_old
+relB <- ssbtable(fit)[,"Estimate"]/BMSY
+
+relBlim_old <- ssbtable(fit_old)[,"Estimate"]/Blim_old
+relBlim <- ssbtable(fit)[,"Estimate"]/Blim
+```
+
+The new assessment and reference points seems to suggest that our perception of Fbar compared to F~MSY~ as increased, meaning that F~MSY~ has decreased or Fbar has increased compared to the 2025 assessment, notably back in time (Figure \ref{fig:comp}). Our perception of SSB compared to B~lim~ is similar as before and the SSB is slightly larger than B~MSY~ compared to the 2025 assessment. The ratio B~lim~ over B~MSY~ changed from `r icesAdvice::icesRound(Blim_old/Bmsy_old)` at the last benchmark to `r icesAdvice::icesRound(Blim/BMSY)` now.
+
+
+```{r comp, echo=FALSE, fig.cap="Fbar and SSB relative to reference points.", fig.dim=c(6,10)}
+par(mfrow=c(3,1), mar=c(0,4,0,0), oma=c(3,1,1,1))
+plot(relF~names(relF), type="l", ylim=c(0,7), ylab="F / FMSY", xlab="", xaxt="n")
+lines(relF_old~names(relF_old), col="deepskyblue", lty=2)
+legend("topright", legend=c("New model", "2025 assessment"), lty=1:2, col=c("black", "deepskyblue"), bty="n")
+
+plot(relB~names(relB), type="l", ylim=c(0,2), ylab="SSB / BMSY", xlab="", xaxt="n")
+lines(relB_old~names(relB_old), col="deepskyblue", lty=2)
+
+plot(relBlim~names(relBlim), type="l", ylim=c(0,3), ylab="SSB / Blim", xlab="")
+lines(relBlim_old~names(relBlim_old), col="deepskyblue", lty=2)
+```
+
+
+
+# Settings for the short-term forecast
+
+The settings for the short-term forecast were discussed at the benchmark meeting but will be finalized at HAWG in 2026.
+
+The group agreed to use the single fleet stochastic forecast in SAM (was a deterministic multifleet forecast since the last benchmark in 2018) as basis for the short-term forecast. This will allow us to present the probability to fall under B~lim~ in the advice sheet, which was not possible until now. As usual, the intermediate year will still follow a catch constraint that would have to be summed across management units and fleets. Regarding the recruitment assumption, some tests will be done at HAWG regarding using a sample of recent recruitment or the stock-recruitment relationship. A recent period (e.g., last 5 years) will be likely used for biological and selectivity input to reflect most recent biology and fishery.
+
+
+# Comments on the internal estimation of reference points in SAM
+
+Numerous tests were done at the benchmark to ensure the stochastic reference point function was working as expected. Here, we provide some comments to help future users.
+
+Because of the different uncertainty sources that are projected forward, a high number of simulations are needed to get a accurate value for the reference points. Here 10,000 thousand simulations were used. Results with lower number of simulations (e.g., 1,000-5,000) give results very similar rounded to the first significant digit and could be preferred to reduce the computing time.
+
+The reference point values are quite sensitive to the spline fitted to the data. This is likely also relevant for external estimation of reference points. Some tests were performed to find the best spline fit. This could be done within the reference point function if deemed relevant. This will be investigated in the future.
+
+Here, the confidence intervals around reference points were not calculated due to the increase in computing time and the fact that they are not currently used in ICES. Presenting confidence intervals around the MSY reference points might though be interesting to consider in the future.
+
+When the AR is used for estimating reference points, the function is quite time consuming. Some work will be done in the future to allow the function to run in parallel.
+
+
+# References
+  
