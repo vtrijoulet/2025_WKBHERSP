@@ -550,7 +550,7 @@ MSYBtrigger <- Bpa <- Bpa_default
 
 # Estimate F~PA~
 
-To estimate F~PA~, we use the same function as for F~MSY~, but we now use the ICES AR with the new chosen MSY B~trigger~ (`r formatC(round(MSYBtrigger),format='d',big.mark=" ")` t), including a two year management lag to reflect the current ICES short-term forecast procedure, as recommended by @ICES2024WKNEWREF. The F~target~ follows this the current method used in the short-term forecast (i.e., $F_y=F_{MSY}*SSB_{y-1}/MSY B_{trigger}$). This can be coded as follows:
+To estimate F~PA~, we use the same function as for F~MSY~, but we now use the ICES AR with the new chosen MSY B~trigger~ (`r formatC(round(MSYBtrigger),format='d',big.mark=" ")` t), including a two year management lag to reflect the current ICES short-term forecast procedure, as recommended by @ICES2024WKNEWREF. The F~target~ follows the current method used in the short-term forecast (i.e., $F_y=F_{MSY}*SSB_{y-1}/MSY B_{trigger}$). This can be coded as follows:
 
 
 ```{r, eval=FALSE}
