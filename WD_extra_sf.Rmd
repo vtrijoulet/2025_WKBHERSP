@@ -1,5 +1,5 @@
 ---
-title: "Working document: Additionnal information on the single fleet model for WBSS herring"
+title: "Working document: Additional information on the single fleet model for WBSS herring"
 author: Vanessa Trijoulet
 output:
   bookdown::pdf_document2: default
