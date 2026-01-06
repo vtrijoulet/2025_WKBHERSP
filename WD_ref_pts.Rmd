@@ -28,7 +28,7 @@ load("results/fits15_sf.RData")
 load("results/refpts1.RData")
 load("results/B0_nosim=10000.RData")
 load("results/BMSY_nosim=10000.RData")
-load("results/stochamsy_hcr_nosim=10000.RData")
+load("results/stochamsy_hcr_nosim=10000_Btrigger274225.RData")
 fit <- stockassessment:::refit(fit15)
 options(scipen=99999)
 ```
@@ -297,11 +297,11 @@ srplot(fit)
 abline(h=med_rec, lwd=2, lty=2)
 ```
 
-We see in Figure \ref{fig:srMEd} that recruitment for the years 2010 and 2013 (first two values) are not significantly above median recruitment. As a result, B~emp~ is estimated ignoring the first two pairs, as follows:
+<!-- We see in Figure \ref{fig:srMEd} that recruitment for the years 2010 and 2013 (first two values) are not significantly above median recruitment. As a result, -->
+B~emp~ is estimated <!-- ignoring the first two pairs,  --> as follows:
 
 ```{r}
-# remove 1st 2 years not significantly above median recruitment:
-tmp2 <- pairs[order(pairs[, "SSB"]),][-c(1,2),] 
+tmp2 <- pairs[order(pairs[, "SSB"]),]#[-c(1,2),] 
 Bemperical_k <- c(round(mean(tmp2[order(tmp2[, "SSB"]),][1,"SSB"])),  
                   round(mean(tmp2[order(tmp2[, "SSB"]),][1:2,"SSB"])),    
                   round(mean(tmp2[order(tmp2[, "SSB"]),][1:3,"SSB"])))  
@@ -312,14 +312,14 @@ names(Bemperical_k) <- c("k=1", "k=2", "k=3")
 
 ```{r emperical, echo=FALSE, results='markup'}
 kable(rbind("Bemp"=Bemperical_k), format = "latex", booktabs = TRUE, caption = "Emperical biomass for different number of SSB estimates to average across (k), in tonnes.") %>%
-  kable_styling(latex_options = c("striped"))
+  kable_styling(latex_options = c("striped")) 
 ```
 
 
 The resulting values for k=1-3 are given in Table \ref{tab:emperical}. The group favored the value for k=3.
 
 ```{r}
-Bempirical <- Bemperical_k["k=3"]
+Bempirical <- Bemperical_k["k=3"] 
 ```
 
 
@@ -454,7 +454,7 @@ abline(h=round(0.3*BMSY), col=cols[3], lwd=2)
 abline(h=round(0.4*BMSY), col=cols[4], lwd=2)
 abline(h=round(0.5*BMSY), col=cols[5], lwd=2)
 abline(h=round(0.45*BMSY), col=cols[6], lwd=2)
-abline(h=round(Bempirical), col=cols[7], lwd=2)
+abline(h=round(Bempirical), col=cols[7], lwd=2) 
 ```
 
 
@@ -475,17 +475,21 @@ for (i in c(0.35*B0_final, 0.2*B0_final, 0.3*BMSY, 0.4*BMSY, 0.5*BMSY, 0.45*BMSY
   rebuild_yr_5pct <- c(rebuild_yr_5pct, yrs[which(sapply(B0run,function(x) mean(x$ssb >= Blim))>0.95)[1]])
 }
 names(rebuild_yr_5pct) <- c("0.35*B0", "0.2*B0", "0.3*BMSY", "0.4*BMSY","0.5*BMSY", "0.45*BMSY", "Bemp")
-
+ 
 
 ```
 
 
 ```{r prob, echo=FALSE, results='markup'}
 kable(rbind("Rebuilding year"=rebuild_yr_5pct), format = "latex", booktabs = TRUE, caption = "First year in the projection with F=0 where the probability of SSB falling below Blim is less than 5\\%.") %>%
-  kable_styling(latex_options = c("striped"))
+  kable_styling(latex_options = c("striped")) 
 ```
 
 The group favored the B~emp~ value rather than any fraction of B~0~ or B~MSY~ as the B~lim~ for this stock. The argument was that recruitment is still visually improving above all the other potential values. According to ICES guidelines, B~lim~ is the "biomass limit below which a stock is considered to have reduced reproductive capacity", only B~emp~ satisfies this definition. Using the option of 0.45.B~MSY~, i.e., maximum productivity obtained from a meta-analysis on *Clupeidae* [@albertsen2025] could have also fit the definition of impaired recruitment but is less in line with ICES current methods of estimating B~lim~, and some people at the benchmark were uncomfortable in using a fraction obtained from a meta-analysis as this fraction might not be relevant to this specific stock. As a result B~emp~ value was chosen as B~lim~ by the group. Note that the stock assessor favored a lower B~lim~ value (i.e., 0.45.B~MSY~).
+
+```{r}
+Blim <- Bempirical 
+```
 
 
 ## MSY B~trigger~
@@ -495,7 +499,7 @@ Different values below were estimated as potential MSY B~trigger~. The last two 
 
 ### Fractions of B~MSY~
 
-In the literature, MSY B~trigger~ is sometimes estimated as a fraction of B~MSY~. Here, we investigated two fractions: $0.5.B_{MSY}$ as used in SPiCT, and $0.8.B_{MSY}$ as used by default in DFO, Canada. These would lead to values of `r formatC(round(0.5*BMSY),format='d',big.mark=" ")` t and `r formatC(round(0.8*BMSY),format='d',big.mark=" ")` t, respectively. The first value is smaller than the chosen B~lim~, so cannot be used. The second value could be considered if larger than B~pa~. 
+In the literature, MSY B~trigger~ is sometimes estimated as a fraction of B~MSY~. Here, we investigated two fractions: $0.5.B_{MSY}$ as used in SPiCT, and $0.8.B_{MSY}$ as used by default in DFO, Canada. These would lead to values of `r formatC(round(0.5*BMSY),format='d',big.mark=" ")` t and `r formatC(round(0.8*BMSY),format='d',big.mark=" ")` t, respectively. The first value is smaller than the chosen B~lim~, so cannot be used. The second value could be considered if larger than B~PA~. 
 
 
 ### 5^th^ percentile of SSB at F=F~MSY~
@@ -535,7 +539,7 @@ sdtab <- sdState(fit)
 
 fn_sd <- function(Blim, sd) Blim*exp(1.645*sd)
 Bpa_default <- fn_sd(Bempirical,0.2)
-Bpa_sam <- fn_sd(Bempirical,sdtab["2024", "sd(log(SSB))"])
+Bpa_sam <- fn_sd(Bempirical,sdtab["2024", "sd(log(SSB))"]) 
 ```
 
 B~PA~ estimated with the default $\sigma$ value is `r formatC(round(Bpa_default),format='d',big.mark=" ")` t, and B~PA~ estimated with the assessment standard deviation in 2024 ($\sigma=`r sdtab["2024", "sd(log(SSB))"]`$) is `r formatC(round(Bpa_sam),format='d',big.mark=" ")` t. Both values are larger than the value obtained with $0.8.B_{MSY}$, so this latter cannot be used for MSY B~trigger~.
@@ -543,7 +547,7 @@ B~PA~ estimated with the default $\sigma$ value is `r formatC(round(Bpa_default)
 The stock has in the past suffered from having B~lim~ too close to MSY B~trigger~. As a result the group chose to use the largest value for MSY B~trigger~ , i.e., `r formatC(round(Bpa_default),format='d',big.mark=" ")` t.
 
 ```{r}
-MSYBtrigger <- Bpa <- Bpa_default
+MSYBtrigger <- Bpa <- Bpa_default 
 ```
 
 
@@ -555,7 +559,7 @@ To estimate F~PA~, we use the same function as for F~MSY~, but we now use the IC
 
 ```{r, eval=FALSE}
 stochamsy_hcr <- stochasticReferencepoints(fit,
-                                           constraint="HCR=%f~309861SSB-1",
+                                           constraint="HCR=%f~274225SSB-1",
                                            useManagementLag=TRUE,
                                            method="Q0.05",
                                            referencepoints = c("MSY", "0.2B0"), 
@@ -579,20 +583,20 @@ F~PA~ is then obtained by estimated the F~target~ for which the $P(SSB < B~lim~)
 ```{r Fpa}
 # stochamsy_hcr$regression[[2]] is the curve for the 5% quantile of SSB when fishing at the different Fs.
 i<-which.min(abs(stochamsy_hcr$regression[[2]][,2]-Blim))
-Fpa <- stochamsy_hcr$regression[[2]][i,1]
+Fpa <- stochamsy_hcr$regression[[2]][i,1] 
 ```
 
 ```{r SSBhcr, fig.cap = "SSB values obtained in the reference point simulations including ICES AR and lag in management. The red line shows the 5th percentile regression and the black horizontal line shows Blim.", fig.dim=c(6,6)}
 plot(stochamsy_hcr$graphs$Biomass~stochamsy_hcr$graphs$F, ylab="SSB", xlab="F target", pch=16, col=rgb(0,0,0, 0.3))
 lines(stochamsy_hcr$regression[[2]][,2]~stochamsy_hcr$regression[[2]][,1], col="red", lwd=2)
-abline(h=Blim, lwd=2) 
+abline(h=Blim, lwd=2)
 ```
 
 The resulting F~pa~ is `r Fpa`. 
 
 ```{r}
 Fpa <- 0.05 # only 1 significant digit as FMSY
-FMSY_final <- min(FMSY, Fpa) 
+FMSY_final <- min(FMSY, Fpa)
 ```
 
 For the same reasons as for the initial F~MSY~, the F~PA~ value is rounded to only one significant digit due to simulation variability. Because F~PA~ is lower than F~MSY~, F~MSY~ is then capped at `r icesAdvice::icesRound(FMSY_final)`. This value was validated by a grid search made in parallel and not presented here.
@@ -614,7 +618,7 @@ tabRefPts[,2] <- c("$MSY B_{\\text{trigger}}$",
 tabRefPts[,3] <- (c(formatC(round(MSYBtrigger),format='d',big.mark=" "), icesAdvice::icesRound(FMSY_final), formatC(round(Blim),format='d',big.mark=" "), formatC(round(Bpa),format='d',big.mark=" "), icesAdvice::icesRound(Fpa)))
 tabRefPts[, 4] <- c("$B_{\\mathrm{PA}}$; in tonnes",
                     "Stochastic simulations (SAM) with segmented regression. Capped at $F_{\\mathrm{PA}}$.",
-                    "Empirical $B_{\\mathrm{lim}}$, mean of the three lowest SSB values (1996, 1998, 1999) significantly above median recruitment; in tonnes",
+                    "Empirical $B_{\\mathrm{lim}}$, mean of the three lowest SSB values (2010, 2013, 1996) with above median recruitment; in tonnes",
                     "$B_{\\mathrm{lim}} \\, \\times \\, \\exp\\big(1.645 \\, \\times \\, \\sigma\\big),\\; \\sigma = 0.2$; in tonnes.",
                     "$F_{p05}$; the F that leads to SSB $\\geq$ $B_{\\mathrm{lim}}$ with 95\\% probability"
 )
@@ -628,7 +632,7 @@ kable(tabRefPts,
   kable_styling(latex_options = c("striped")) %>%
   column_spec(1, width = "2.5cm") %>%
   column_spec(4, width = "9cm")
-  #landscape()   
+  #landscape() 
 ```
 
 
@@ -651,10 +655,10 @@ relB_old <- ssbtable(fit_old)[,"Estimate"]/Bmsy_old
 relB <- ssbtable(fit)[,"Estimate"]/BMSY
 
 relBlim_old <- ssbtable(fit_old)[,"Estimate"]/Blim_old
-relBlim <- ssbtable(fit)[,"Estimate"]/Blim
+relBlim <- ssbtable(fit)[,"Estimate"]/Blim 
 ```
 
-The new assessment and reference points seems to suggest that our perception of Fbar compared to F~MSY~ as increased, meaning that F~MSY~ has decreased or Fbar has increased compared to the 2025 assessment, notably back in time (Figure \ref{fig:comp}). Our perception of SSB compared to B~lim~ is similar as before and the SSB is slightly larger than B~MSY~ compared to the 2025 assessment. The ratio B~lim~ over B~MSY~ changed from `r icesAdvice::icesRound(Blim_old/Bmsy_old)` at the last benchmark to `r icesAdvice::icesRound(Blim/BMSY)` now.
+The new assessment and reference points seems to suggest that our perception of Fbar compared to F~MSY~ as increased, meaning that F~MSY~ has decreased or Fbar has increased compared to the 2025 assessment, notably back in time (Figure \ref{fig:comp}). The same is seen for our perception of SSB compared to MSY B~trigger~ or B~lim~ but only after middle of the 1990's, and the new current perception (2024) is very close to our perception at the 2025 assessment. <!-- Our perception of SSB compared to B~lim~ is similar as before and the SSB is slightly larger than B~MSY~ compared to the 2025 assessment.  --> The ratio B~lim~ over B~MSY~ changed from `r icesAdvice::icesRound(Blim_old/Bmsy_old)` at the last benchmark to `r icesAdvice::icesRound(Blim/BMSY)` now.
 
 
 ```{r comp, echo=FALSE, fig.cap="Fbar and SSB relative to reference points.", fig.dim=c(6,10)}
@@ -667,7 +671,7 @@ plot(relB~names(relB), type="l", ylim=c(0,2), ylab="SSB / BMSY", xlab="", xaxt="
 lines(relB_old~names(relB_old), col="deepskyblue", lty=2)
 
 plot(relBlim~names(relBlim), type="l", ylim=c(0,3), ylab="SSB / Blim", xlab="")
-lines(relBlim_old~names(relBlim_old), col="deepskyblue", lty=2)
+lines(relBlim_old~names(relBlim_old), col="deepskyblue", lty=2) 
 ```
 
 
